@@ -16,8 +16,5 @@ Plan: `_planning/plans/2026-09-25-phase-2-tracing.md`. Phase 3 (dataset + evalua
   close VS Code's Python language server first, it locks `.pyd` files.
 
 ## Next
-Phase 3 - dataset + evaluators (plan awaiting Marko's OK).
+Phase 3 - dataset + evaluators (plan approved 2026-09-25, in progress).
 
-Deferred test-reviewer findings (medium, Phase 2): positive control does not separate
-masking-by-user from masking-by-retrieval (lead + public-only retrieval); pin sample_rate/tracing_enabled/sampler in
-the capture fixture; no test for the fail-closed default; no test for restricted call failing both attempts.
