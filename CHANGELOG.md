@@ -22,3 +22,9 @@
 - `supersedes` frontmatter; loader rejects a newer version that is less strict or not dated later.
 - Tests: budget check on the real corpus, exact-result clearance tests, restricted-citation test,
   retry leak check, truncation across retry, cache invalidation; `security` marker on access tests. 67 tests.
+
+### Review round 3 (last for Phase 1)
+- OllamaClient contract tests via `httpx.MockTransport` (num_ctx, schema, think, usage mapping).
+- Security test: doc switched to restricted is hidden even with a warm index cache.
+- Fixed four tests that passed for the wrong reason (see DECISIONS 17); `FIXED_TODAY` = 2026-07-15.
+- test-reviewer agent: max 5 findings with severity, only new/changed code. 73 tests.

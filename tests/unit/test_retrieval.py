@@ -14,11 +14,15 @@ PUBLIC_IDS = {"orion-overview", "holiday-policy", "budget-process"}
 
 
 @pytest.mark.security
-def test_top1_for_restricted_best_match_is_one_public_doc(retriever: Retriever, analyst: User):
-    # The restricted doc ranks first for this query. A filter applied after top-k would drop it
-    # and return [], which `all(...)` alone would pass vacuously -- so check the count too.
+def test_top1_for_restricted_best_match_is_one_public_doc(retriever: Retriever, analyst: User,
+                                                          lead: User):
+    # Precondition: for a cleared user the restricted doc is the best match.
+    assert retriever.search(ORION_Q, lead, k=1)[0].doc.id == "orion-budget"
+
     hits = retriever.search(ORION_Q, analyst, k=1)
 
+    # A filter applied after top-k would drop the restricted hit and return [], which a bare
+    # `all(public)` check passes vacuously -- so the count matters as much as the access.
     assert len(hits) == 1
     assert hits[0].doc.access is Access.PUBLIC
 
@@ -29,18 +33,6 @@ def test_k_above_corpus_returns_exactly_the_public_docs(retriever: Retriever, an
     hits = retriever.search(ORION_Q, analyst, k=10)
 
     assert {h.doc.id for h in hits} == PUBLIC_IDS
-
-
-@pytest.mark.security
-def test_retrieval_filters_before_ranking(retriever: Retriever, analyst: User, lead: User):
-    query = "Orion project budget million euros"
-    # Precondition: for a cleared user the restricted doc is the best match, so a
-    # filter applied after top-k would leave the analyst with fewer than k results.
-    assert retriever.search(query, lead, k=1)[0].doc.id == "orion-budget"
-
-    hits = retriever.search(query, analyst, k=3)
-
-    assert [h.doc.access for h in hits] == [Access.PUBLIC] * 3
 
 
 def test_retrieval_ranks_most_similar_first(retriever: Retriever, analyst: User):
@@ -122,3 +114,21 @@ def test_cached_index_ranks_same_as_fresh(docs_dir: Path, tmp_path: Path, analys
 
     assert [(h.doc.id, round(h.score, 9)) for h in cached] == \
            [(h.doc.id, round(h.score, 9)) for h in fresh]
+
+
+@pytest.mark.security
+def test_doc_made_restricted_is_hidden_even_with_warm_cache(docs_dir: Path, tmp_path: Path,
+                                                            analyst: User):
+    # Same text -> same cache key, so the cached vectors are reused. Access must still come from
+    # the freshly loaded docs, never from anything stored next to the vectors.
+    cache = tmp_path / "cache"
+    _build(docs_dir, cache)
+    write_doc(docs_dir, "budget-process.md", "budget-process", "Budget process", "restricted",
+              "Every project budget is reviewed each quarter by finance.")
+    embedder = CountingEmbedder()
+    retriever = Retriever(load_documents(docs_dir), embedder, cache_dir=cache)
+    assert embedder.embedded == 0  # precondition: the warm cache was actually used
+
+    hits = retriever.search("project budget reviewed by finance", analyst, k=10)
+
+    assert "budget-process" not in {h.doc.id for h in hits}

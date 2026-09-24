@@ -16,7 +16,10 @@ FIXTURE_DOCS = {
                           "Every project budget is reviewed each quarter by finance."),
 }
 RESTRICTED_SECRET = "BLUEHERON"
-FIXED_TODAY = date(2026, 9, 24)  # tests never read the real clock
+# Tests never read the real clock. A past date, so it never equals the run date and a wall-clock
+# bug can't hide behind a coincidence. Before orion-budget-v2 takes effect; tests that need a
+# later date set their own.
+FIXED_TODAY = date(2026, 7, 15)
 
 
 def write_doc(directory: Path, filename: str, doc_id: str, title: str, access: str, body: str,

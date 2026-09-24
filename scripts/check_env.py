@@ -10,7 +10,7 @@ from datetime import date
 
 import httpx
 
-from mini_rag.assistant import estimate_worst_case_prompt_tokens
+from mini_rag.assistant import DEFAULT_K, estimate_worst_case_prompt_tokens
 from mini_rag.config import PROJECT_ROOT, Settings
 from mini_rag.documents import DocumentError, load_documents
 
@@ -55,7 +55,7 @@ def main() -> int:
     try:
         docs = load_documents(s.docs_dir)
         report(True, f"corpus loads ({len(docs)} docs)")
-        estimate = estimate_worst_case_prompt_tokens(docs, k=3, today=date.today())
+        estimate = estimate_worst_case_prompt_tokens(docs, k=DEFAULT_K, today=date.today())
         budget = s.max_prompt_ctx_share * s.num_ctx
         report(estimate <= budget,
                f"worst-case prompt ~{estimate} tokens <= {budget:.0f} "

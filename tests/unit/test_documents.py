@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from pathlib import Path
 
@@ -27,7 +28,10 @@ def test_loader_parses_valid_frontmatter(docs_dir: Path):
 def test_loader_skips_underscore_files(docs_dir: Path):
     write_doc(docs_dir, "_TEMPLATE.md", "example-doc", "Example", "public", "Template body.")
 
-    assert "example-doc" not in {d.id for d in load_documents(docs_dir)}
+    ids = {d.id for d in load_documents(docs_dir)}
+
+    assert "example-doc" not in ids
+    assert ids == {"orion-budget", "orion-overview", "holiday-policy", "budget-process"}
 
 
 @pytest.mark.parametrize(
@@ -80,14 +84,14 @@ def _versioned(tmp_path: Path, old_access: str, old_eff: str | None,
         f"supersedes: {supersedes}\n---\nNew.\n", encoding="utf-8")
 
 
-def test_project_corpus_versions_supersede_with_same_access_and_later_date():
-    # Loading enforces the invariant; this pins that the real corpus actually uses it.
-    docs = {d.id: d for d in load_documents(PROJECT_ROOT / "data" / "docs")}
-    pairs = [(d, docs[d.supersedes]) for d in docs.values() if d.supersedes]
+def test_every_versioned_corpus_doc_declares_what_it_supersedes():
+    # The loader only checks docs that set `supersedes`. A `-v2` file without it would skip the
+    # access and date checks entirely, so the naming convention must be backed by the field.
+    docs = load_documents(PROJECT_ROOT / "data" / "docs")
+    versioned = [d for d in docs if re.search(r"-v\d+$", d.id)]
 
-    assert {new.id for new, _ in pairs} == {"holiday-policy-v2", "remote-work-policy-v2",
-                                            "orion-budget-v2"}
-    assert all(new.effective > old.effective for new, old in pairs)
+    assert versioned  # precondition: the corpus has versioned docs at all
+    assert [d.id for d in versioned if d.supersedes is None] == []
 
 
 @pytest.mark.parametrize(
@@ -111,21 +115,24 @@ def test_superseding_doc_less_strict_than_original_is_rejected(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    ("old_eff", "new_eff", "supersedes"),
+    ("old_eff", "new_eff", "supersedes", "reason"),
     [
-        pytest.param("2026-01-01", "2025-01-01", "policy", id="earlier-than-original"),
-        pytest.param("2026-01-01", "2026-01-01", "policy", id="same-date"),
-        pytest.param("2025-01-01", None, "policy", id="new-without-date"),
-        pytest.param(None, "2026-01-01", "policy", id="old-without-date"),
-        pytest.param("2025-01-01", "2026-01-01", "no-such-doc", id="unknown-target"),
+        pytest.param("2026-01-01", "2025-01-01", "policy", "effective date",
+                     id="earlier-than-original"),
+        pytest.param("2026-01-01", "2026-01-01", "policy", "effective date", id="same-date"),
+        pytest.param("2025-01-01", None, "policy", "effective date", id="new-without-date"),
+        pytest.param(None, "2026-01-01", "policy", "effective date", id="old-without-date"),
+        pytest.param("2025-01-01", "2026-01-01", "no-such-doc", "unknown id",
+                     id="unknown-target"),
     ],
 )
 def test_superseding_doc_that_cannot_be_ordered_is_rejected(tmp_path: Path, old_eff, new_eff,
-                                                            supersedes):
-    # Without a strictly later date, "which version is current" has no answer.
+                                                            supersedes, reason):
+    # Without a strictly later date, "which version is current" has no answer. Matching the
+    # reason (not just the file) keeps a parse error from passing this test.
     _versioned(tmp_path, "public", old_eff, "public", new_eff, supersedes)
 
-    with pytest.raises(DocumentError, match="policy-v2.md"):
+    with pytest.raises(DocumentError, match=f"policy-v2.md: .*{reason}"):
         load_documents(tmp_path)
 
 

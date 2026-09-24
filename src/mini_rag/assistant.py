@@ -22,6 +22,7 @@ from mini_rag.retrieval import Hit, Retriever
 from mini_rag.users import User
 
 MAX_ATTEMPTS = 2  # first try + one retry
+DEFAULT_K = 3  # docs per prompt; also used by the context-budget checks
 
 SYSTEM_PROMPT = """You answer questions using ONLY the documents in the context.
 Rules:
@@ -107,7 +108,7 @@ def estimate_worst_case_prompt_tokens(docs: list[Document], k: int, today: date)
 
 
 class Assistant:
-    def __init__(self, retriever: Retriever, llm: LLMClient, k: int = 3, *,
+    def __init__(self, retriever: Retriever, llm: LLMClient, k: int = DEFAULT_K, *,
                  today: Callable[[], date] = date.today, num_ctx: int | None = None,
                  max_prompt_ctx_share: float | None = None) -> None:
         self.retriever = retriever

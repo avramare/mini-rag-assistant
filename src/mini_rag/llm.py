@@ -48,11 +48,12 @@ class OllamaClient:
     """
 
     def __init__(self, host: str, model: str, embed_model: str, num_ctx: int,
-                 timeout: float = 120.0) -> None:
+                 timeout: float = 120.0, transport: httpx.BaseTransport | None = None) -> None:
         self.model = model
         self.embed_model = embed_model
         self.num_ctx = num_ctx
-        self._http = httpx.Client(base_url=host, timeout=timeout)
+        # `transport` lets unit tests plug in httpx.MockTransport: real client code, no network.
+        self._http = httpx.Client(base_url=host, timeout=timeout, transport=transport)
         self._supports_thinking: bool | None = None
 
     def supports_thinking(self) -> bool:
