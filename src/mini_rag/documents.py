@@ -1,5 +1,6 @@
 """Load Markdown documents with YAML frontmatter from `data/docs/`."""
 
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 
@@ -19,6 +20,8 @@ class Document(BaseModel):
     title: str = Field(min_length=1)
     access: Access
     body: str = Field(min_length=1)
+    # Optional. Several versions of one policy can coexist; the date tells which is in force.
+    effective: date | None = None
 
 
 class DocumentError(ValueError):
@@ -37,7 +40,8 @@ def parse_document(path: Path) -> Document:
         raise DocumentError(path, "missing YAML frontmatter delimited by '---'")
     try:
         meta = yaml.safe_load(parts[1])
-    except yaml.YAMLError as exc:
+    # ValueError: PyYAML turns `2026-04-31` into a date object itself and raises plain ValueError.
+    except (yaml.YAMLError, ValueError) as exc:
         raise DocumentError(path, f"invalid YAML frontmatter: {exc}") from exc
     if not isinstance(meta, dict):
         raise DocumentError(path, "frontmatter must be a mapping")

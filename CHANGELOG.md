@@ -6,3 +6,13 @@
 - Core: document loader, users, access-filtered cosine retrieval, LLM/Embedder protocols, OllamaClient, FakeLLM, FakeEmbedder, assistant with JSON contract and one recorded retry.
 - 20 draft corpus docs (fictional "Kestrel Logistics").
 - 44 deterministic unit tests, < 1 s, no network.
+
+### Review fixes (Marko's Phase 0/1 review)
+- Uncited non-refused answers become refusals with `refusal_reason="uncited"`; model refusals get `"model"`.
+- Versioned docs: optional `effective` date, shown in context headers; injected clock puts "Today is …" in the prompt;
+  rule: use latest effective date not after today. Added v2 of holiday, remote-work (in force) and Orion budget (future trap).
+- OllamaClient: explicit `num_ctx`, `think: false` when the model supports thinking, structured outputs with the
+  Answer JSON schema, returns prompt/completion tokens and duration. `AnswerResult.truncation_risk` flags prompts
+  above `MAX_PROMPT_CTX_SHARE` of `NUM_CTX`.
+- check_env: corpus loads and worst-case prompt fits the context budget.
+- Tests: applied 4 test-reviewer findings, added refusal-path, retry-context, uncited, date and truncation tests. 51 tests.

@@ -5,17 +5,20 @@ from mini_rag.llm import FakeEmbedder
 from mini_rag.retrieval import Retriever
 from mini_rag.users import User
 
-QUERIES = ["What is the Orion project budget?", "BLUEHERON", "holiday", "anything"]
 
-
-@pytest.mark.parametrize("query", QUERIES)
-@pytest.mark.parametrize("k", [1, 3, 10])
-def test_retrieval_never_returns_doc_above_clearance(retriever: Retriever, analyst: User,
-                                                     query: str, k: int):
-    hits = retriever.search(query, analyst, k=k)
+@pytest.mark.parametrize(
+    "k",
+    [
+        # k=1 with a query the restricted doc ranks first for: catches a leak through ranking.
+        pytest.param(1, id="top1-restricted-best-match"),
+        # k above the corpus size: catches returning everything unfiltered.
+        pytest.param(10, id="k-exceeds-corpus"),
+    ],
+)
+def test_retrieval_never_returns_doc_above_clearance(retriever: Retriever, analyst: User, k: int):
+    hits = retriever.search("What is the Orion project budget?", analyst, k=k)
 
     assert all(h.doc.access is Access.PUBLIC for h in hits)
-    assert "orion-budget" not in {h.doc.id for h in hits}
 
 
 def test_retrieval_filters_before_ranking(retriever: Retriever, analyst: User, lead: User):

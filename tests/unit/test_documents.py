@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,21 @@ def test_loader_rejects_unknown_access_level(tmp_path: Path, access: str):
     write_doc(tmp_path, "typo.md", "typo-doc", "Typo", access, "Body.")
 
     with pytest.raises(DocumentError, match="access"):
+        load_documents(tmp_path)
+
+
+def test_loader_parses_effective_date(tmp_path: Path):
+    write_doc(tmp_path, "v2.md", "policy-v2", "Policy", "public", "Body.", effective="2027-01-01")
+
+    assert load_documents(tmp_path)[0].effective == date(2027, 1, 1)
+
+
+@pytest.mark.parametrize("effective", ["2026-04-31", "next year", "2026-13-01"])
+def test_loader_rejects_invalid_effective_date(tmp_path: Path, effective: str):
+    # A bad date would silently break "which version is current", so it must fail loudly.
+    write_doc(tmp_path, "bad.md", "bad-doc", "Bad", "public", "Body.", effective=effective)
+
+    with pytest.raises(DocumentError, match="bad.md"):
         load_documents(tmp_path)
 
 

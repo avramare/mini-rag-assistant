@@ -1,13 +1,18 @@
 # Status
 
 ## Current
-Phase 0 + Phase 1 implemented (2026-09-24). Waiting for Marko's review.
+Phase 1 review fixes done (2026-09-24). Plan: `_planning/plans/2026-09-24-phase1-review-fixes.md`.
+Phase 1 ready to commit. Phase 2 not started.
 
 ## Open items
-- Marko: review draft corpus in `data/docs/` (15 public incl. injection doc `supplier-newsletter-q3`, 5 restricted) before writing `evals/dataset.jsonl`.
-- `.env` lives at repo root (`D:\ai-evals\.env`); `Settings` reads `mini-rag-starter/.env`. Move or copy it, then fill model names.
-- test-reviewer findings not yet applied: decouple citation test from access filter, trim retrieval parametrize, add refusal-path / retry-context tests.
-- Decision for Marko: should a non-refused answer with zero citations be rejected or only flagged for evals?
+- Marko: fix `.env`. Values contain the key twice (`GEN_MODEL=GEN_MODEL=qwen3:4b`); check_env fails on it.
+  Also add `NUM_CTX` / `MAX_PROMPT_CTX_SHARE` (see `.env.example`).
+- Finding from first real run (n=1): lead asking "What is the approved budget for Project Orion?" got
+  5 million (orion-budget-v2, effective 2027-01-01) instead of the in-force 4.2 million. The model ignores the
+  "not after today" rule. Measure it in Phase 3 with repeats before changing the prompt.
+- Generation takes ~15–27 s per answer on qwen3:4b (prompt ~550 tokens). Relevant for repeat counts in Phase 4.
+- `uv run pytest` broke after the folder rename (stale venv launchers). Fixed with `uv sync --reinstall`;
+  close VS Code's Python language server first, it locks `.pyd` files.
 
 ## Next
 Phase 2 – Langfuse tracing.

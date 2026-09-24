@@ -1,6 +1,7 @@
 """Check that the local environment is ready: .env, Ollama, models, Langfuse keys.
 
 Usage: uv run python scripts/check_env.py
+Also checks that the worst-case prompt fits NUM_CTX.
 Prints one line per check and exits 1 if anything is missing. Never prints secret values.
 """
 
@@ -8,7 +9,9 @@ import sys
 
 import httpx
 
+from mini_rag.assistant import estimate_worst_case_prompt_tokens
 from mini_rag.config import PROJECT_ROOT, Settings
+from mini_rag.documents import DocumentError, load_documents
 
 OK, FAIL = "[ok]  ", "[fail]"
 
@@ -47,6 +50,18 @@ def main() -> int:
                 # `ollama list` shows "llama3.2:latest" for a model configured as "llama3.2"
                 found = value in pulled or f"{value}:latest" in pulled
                 report(found, f"{name} '{value}' is pulled", f"run `ollama pull {value}`")
+
+    try:
+        docs = load_documents(s.docs_dir)
+        report(True, f"corpus loads ({len(docs)} docs)")
+        estimate = estimate_worst_case_prompt_tokens(docs, k=3)
+        budget = s.max_prompt_ctx_share * s.num_ctx
+        report(estimate <= budget,
+               f"worst-case prompt ~{estimate} tokens <= {budget:.0f} "
+               f"({s.max_prompt_ctx_share:.0%} of NUM_CTX={s.num_ctx})",
+               "raise NUM_CTX in .env or shorten the longest documents")
+    except DocumentError as exc:
+        report(False, "corpus loads", str(exc))
 
     for name, secret in {
         "LANGFUSE_PUBLIC_KEY": s.langfuse_public_key,

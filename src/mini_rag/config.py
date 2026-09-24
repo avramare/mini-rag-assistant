@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     gen_model: str = ""
     embed_model: str = ""
     judge_model: str = ""
+    num_ctx: int = 4096
+    max_prompt_ctx_share: float = 0.75
 
     langfuse_public_key: SecretStr = SecretStr("")
     langfuse_secret_key: SecretStr = SecretStr("")
