@@ -13,6 +13,10 @@ class Access(StrEnum):
     RESTRICTED = "restricted"
 
 
+# Higher = stricter. A newer version of a doc must never be readable by more people.
+ACCESS_RANK = {Access.PUBLIC: 0, Access.RESTRICTED: 1}
+
+
 class Document(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -22,6 +26,8 @@ class Document(BaseModel):
     body: str = Field(min_length=1)
     # Optional. Several versions of one policy can coexist; the date tells which is in force.
     effective: date | None = None
+    # Id of the older version this doc replaces. Checked by `check_versions` on load.
+    supersedes: str | None = None
 
 
 class DocumentError(ValueError):
@@ -56,6 +62,7 @@ def parse_document(path: Path) -> Document:
 def load_documents(docs_dir: Path) -> list[Document]:
     """Load every `*.md` in `docs_dir` except files starting with `_`, sorted by id."""
     docs: dict[str, Document] = {}
+    paths: dict[str, Path] = {}
     for path in sorted(docs_dir.glob("*.md")):
         if path.name.startswith("_"):
             continue
@@ -63,4 +70,23 @@ def load_documents(docs_dir: Path) -> list[Document]:
         if doc.id in docs:
             raise DocumentError(path, f"duplicate id '{doc.id}'")
         docs[doc.id] = doc
+        paths[doc.id] = path
+    check_versions(docs, paths)
     return [docs[k] for k in sorted(docs)]
+
+
+def check_versions(docs: dict[str, Document], paths: dict[str, Path]) -> None:
+    """A doc that supersedes another must exist alongside it, be at least as strict, and be
+    dated later. Otherwise a new version could leak an old restricted doc or never be current."""
+    for doc in docs.values():
+        if doc.supersedes is None:
+            continue
+        path = paths[doc.id]
+        old = docs.get(doc.supersedes)
+        if old is None:
+            raise DocumentError(path, f"supersedes unknown id '{doc.supersedes}'")
+        if ACCESS_RANK[doc.access] < ACCESS_RANK[old.access]:
+            raise DocumentError(path, f"access '{doc.access}' is less strict than "
+                                      f"superseded '{old.id}' ({old.access})")
+        if doc.effective is None or old.effective is None or doc.effective <= old.effective:
+            raise DocumentError(path, f"effective date must be set and later than '{old.id}'")

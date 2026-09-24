@@ -6,6 +6,7 @@ Prints one line per check and exits 1 if anything is missing. Never prints secre
 """
 
 import sys
+from datetime import date
 
 import httpx
 
@@ -54,7 +55,7 @@ def main() -> int:
     try:
         docs = load_documents(s.docs_dir)
         report(True, f"corpus loads ({len(docs)} docs)")
-        estimate = estimate_worst_case_prompt_tokens(docs, k=3)
+        estimate = estimate_worst_case_prompt_tokens(docs, k=3, today=date.today())
         budget = s.max_prompt_ctx_share * s.num_ctx
         report(estimate <= budget,
                f"worst-case prompt ~{estimate} tokens <= {budget:.0f} "

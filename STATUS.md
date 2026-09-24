@@ -1,8 +1,7 @@
 # Status
 
 ## Current
-Phase 1 review fixes done (2026-09-24). Plan: `_planning/plans/2026-09-24-phase1-review-fixes.md`.
-Phase 1 ready to commit. Phase 2 not started.
+Phase 1 committed, review round 2 applied (2026-09-24). Phase 2 not started.
 
 ## Open items
 - Marko: fix `.env`. Values contain the key twice (`GEN_MODEL=GEN_MODEL=qwen3:4b`); check_env fails on it.

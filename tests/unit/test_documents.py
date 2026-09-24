@@ -71,6 +71,64 @@ def test_loader_rejects_invalid_effective_date(tmp_path: Path, effective: str):
         load_documents(tmp_path)
 
 
+def _versioned(tmp_path: Path, old_access: str, old_eff: str | None,
+               new_access: str, new_eff: str | None, supersedes: str = "policy") -> None:
+    write_doc(tmp_path, "policy.md", "policy", "Policy", old_access, "Old.", old_eff)
+    eff = f"effective: {new_eff}\n" if new_eff else ""
+    (tmp_path / "policy-v2.md").write_text(
+        f"---\nid: policy-v2\ntitle: Policy\naccess: {new_access}\n{eff}"
+        f"supersedes: {supersedes}\n---\nNew.\n", encoding="utf-8")
+
+
+def test_project_corpus_versions_supersede_with_same_access_and_later_date():
+    # Loading enforces the invariant; this pins that the real corpus actually uses it.
+    docs = {d.id: d for d in load_documents(PROJECT_ROOT / "data" / "docs")}
+    pairs = [(d, docs[d.supersedes]) for d in docs.values() if d.supersedes]
+
+    assert {new.id for new, _ in pairs} == {"holiday-policy-v2", "remote-work-policy-v2",
+                                            "orion-budget-v2"}
+    assert all(new.effective > old.effective for new, old in pairs)
+
+
+@pytest.mark.parametrize(
+    ("old_access", "new_access"),
+    [("public", "public"), ("restricted", "restricted"), ("public", "restricted")],
+)
+def test_superseding_doc_with_same_or_stricter_access_loads(tmp_path: Path, old_access: str,
+                                                            new_access: str):
+    _versioned(tmp_path, old_access, "2025-01-01", new_access, "2026-01-01")
+
+    assert load_documents(tmp_path)[1].supersedes == "policy"
+
+
+@pytest.mark.security
+def test_superseding_doc_less_strict_than_original_is_rejected(tmp_path: Path):
+    # A public v2 of a restricted doc would leak its content to everyone.
+    _versioned(tmp_path, "restricted", "2025-01-01", "public", "2026-01-01")
+
+    with pytest.raises(DocumentError, match="less strict"):
+        load_documents(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old_eff", "new_eff", "supersedes"),
+    [
+        pytest.param("2026-01-01", "2025-01-01", "policy", id="earlier-than-original"),
+        pytest.param("2026-01-01", "2026-01-01", "policy", id="same-date"),
+        pytest.param("2025-01-01", None, "policy", id="new-without-date"),
+        pytest.param(None, "2026-01-01", "policy", id="old-without-date"),
+        pytest.param("2025-01-01", "2026-01-01", "no-such-doc", id="unknown-target"),
+    ],
+)
+def test_superseding_doc_that_cannot_be_ordered_is_rejected(tmp_path: Path, old_eff, new_eff,
+                                                            supersedes):
+    # Without a strictly later date, "which version is current" has no answer.
+    _versioned(tmp_path, "public", old_eff, "public", new_eff, supersedes)
+
+    with pytest.raises(DocumentError, match="policy-v2.md"):
+        load_documents(tmp_path)
+
+
 def test_loader_rejects_duplicate_ids(docs_dir: Path):
     write_doc(docs_dir, "zz-copy.md", "holiday-policy", "Copy", "public", "Other body.")
 

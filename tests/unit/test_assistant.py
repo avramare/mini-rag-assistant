@@ -15,6 +15,7 @@ def reply(answer: str = "27 days.", citations: list[str] | None = None, refused:
 
 
 HOLIDAY_Q = "How many days of paid holiday do employees get?"
+ORION_Q = "What is the Orion project budget and codename?"
 REFUSAL = reply(answer="The documents do not say.", citations=[], refused=True)
 
 
@@ -30,7 +31,8 @@ def test_valid_answer_passes_through_unaltered_with_single_attempt(make_assistan
     assert (result.attempts, result.invalid_outputs) == (1, 0)
 
 
-def test_model_is_asked_for_answer_json_schema(make_assistant, analyst: User):
+def test_decoding_is_constrained_to_answer_schema_without_extra_fields(make_assistant,
+                                                                      analyst: User):
     assistant, llm = make_assistant(reply())
 
     assistant.answer(HOLIDAY_Q, analyst)
@@ -49,15 +51,18 @@ def test_invalid_json_retried_once_then_succeeds(make_assistant, analyst: User):
     assert "not valid JSON" in llm.calls[1][1]
 
 
+@pytest.mark.security
 def test_retry_keeps_system_prompt_and_filtered_context(make_assistant, analyst: User):
-    assistant, llm = make_assistant("not json", reply())
+    # Orion question: the restricted doc is the best match, so a retry that rebuilt the context
+    # without the access filter would pull it in.
+    assistant, llm = make_assistant("not json", REFUSAL)
 
-    assistant.answer(HOLIDAY_Q, analyst)
+    assistant.answer(ORION_Q, analyst)
 
     (system_1, prompt_1), (system_2, prompt_2) = llm.calls
     assert system_1 == system_2 == SYSTEM_PROMPT
-    assert "[doc id: holiday-policy]" in prompt_1
     assert prompt_2.startswith(prompt_1)
+    assert RESTRICTED_SECRET not in prompt_2
 
 
 @pytest.mark.parametrize(
@@ -116,6 +121,18 @@ def test_non_refused_answer_without_citations_becomes_uncited_refusal(make_assis
     assert result.raw_outputs == [ungrounded]  # the original stays available for evals
 
 
+@pytest.mark.security
+def test_citing_restricted_doc_as_analyst_is_rejected(make_assistant, analyst: User):
+    # The model "knows" a restricted id (e.g. from training or an injection). The answer must not
+    # reach the user even though the id is real.
+    assistant, _ = make_assistant(reply(answer=RESTRICTED_SECRET, citations=["orion-budget"]))
+
+    result = assistant.answer(ORION_Q, analyst)
+
+    assert result.error == "invalid_citation"
+    assert result.answer is None
+
+
 def test_user_without_clearance_gets_empty_context_and_refusal_survives(make_assistant):
     nobody = User(name="nobody", clearance=frozenset())
     assistant, llm = make_assistant(REFUSAL)
@@ -138,21 +155,23 @@ def test_citation_with_empty_context_is_rejected(make_assistant):
     assert result.error == "invalid_citation"
 
 
+@pytest.mark.security
 def test_llm_prompt_contains_no_restricted_text_for_analyst(make_assistant, analyst: User):
     assistant, llm = make_assistant(REFUSAL)
 
-    assistant.answer("What is the Orion project budget and codename?", analyst)
+    assistant.answer(ORION_Q, analyst)
 
     system, prompt = llm.calls[0]
     assert RESTRICTED_SECRET not in prompt
     assert "4.2 million" not in prompt
 
 
+@pytest.mark.security
 def test_llm_prompt_includes_restricted_text_for_cleared_user(make_assistant, lead: User):
     # Positive control for the test above: proves the needle would be found if it leaked.
     assistant, llm = make_assistant(reply(answer="4.2 million euros.", citations=["orion-budget"]))
 
-    result = assistant.answer("What is the Orion project budget and codename?", lead)
+    result = assistant.answer(ORION_Q, lead)
 
     assert RESTRICTED_SECRET in llm.calls[0][1]
     assert result.ok
@@ -170,8 +189,9 @@ def test_prompt_shows_effective_date_so_model_can_pick_current_version(make_assi
 @pytest.mark.parametrize(
     "today",
     [
-        pytest.param(date(2026, 12, 31), id="before-future-version"),
-        pytest.param(date(2027, 1, 2), id="after-future-version"),
+        # Two different dates: if one happens to equal the wall clock, the other still catches it.
+        pytest.param(date(2026, 12, 31), id="date-a"),
+        pytest.param(date(2027, 1, 2), id="date-b"),
     ],
 )
 def test_prompt_states_injected_date_not_wall_clock(make_assistant, analyst: User, today: date):
@@ -183,16 +203,24 @@ def test_prompt_states_injected_date_not_wall_clock(make_assistant, analyst: Use
     assert llm.calls[0][1].startswith(f"Today is {today.isoformat()}.")
 
 
-@pytest.mark.parametrize(("prompt_tokens", "expected"),
-                         [(3500, True), (3072, False), (None, False)])
+@pytest.mark.parametrize(
+    ("generations", "expected"),
+    [
+        pytest.param([Generation(reply(), prompt_tokens=3500)], True, id="over-share"),
+        pytest.param([Generation(reply(), prompt_tokens=3072)], False, id="at-share"),
+        pytest.param([Generation(reply(), prompt_tokens=None)], False, id="unknown"),
+        # A risky first attempt must stay flagged even if the retry is small.
+        pytest.param([Generation("not json", prompt_tokens=3500),
+                      Generation(reply(), prompt_tokens=100)], True, id="risky-then-retry"),
+    ],
+)
 def test_truncation_risk_flags_prompt_near_context_limit(make_assistant, analyst: User,
-                                                         prompt_tokens: int | None,
+                                                         generations: list[Generation],
                                                          expected: bool):
     # 0.75 * 4096 = 3072. Ollama truncates silently, so the reported token count is our only signal.
-    assistant, _ = make_assistant(Generation(reply(), prompt_tokens=prompt_tokens),
-                                  num_ctx=4096, max_prompt_ctx_share=0.75)
+    assistant, _ = make_assistant(*generations, num_ctx=4096, max_prompt_ctx_share=0.75)
 
     result = assistant.answer(HOLIDAY_Q, analyst)
 
     assert result.truncation_risk is expected
-    assert result.prompt_tokens == [prompt_tokens]
+    assert result.prompt_tokens == [g.prompt_tokens for g in generations]

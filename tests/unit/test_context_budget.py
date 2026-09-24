@@ -1,23 +1,29 @@
 """Static check that our largest possible prompt fits the context window we send to Ollama.
 
-The real configured values are checked by `scripts/check_env.py`; here the numbers are explicit
-so the test does not depend on a local `.env`.
+Uses the real corpus (the thing that grows) with an explicit num_ctx, never the local `.env`.
+The configured value itself is checked by `scripts/check_env.py`.
 """
 
-import pytest
+from pathlib import Path
 
 from mini_rag.assistant import estimate_worst_case_prompt_tokens
+from mini_rag.config import PROJECT_ROOT
 from mini_rag.documents import load_documents
+from tests.helpers import FIXED_TODAY
+
+SHARE = 0.75
 
 
-@pytest.mark.parametrize(
-    ("num_ctx", "fits"),
-    [
-        pytest.param(4096, True, id="default-num-ctx"),
-        pytest.param(256, False, id="positive-control-too-small"),
-    ],
-)
-def test_worst_case_prompt_fits_context_budget(docs_dir, num_ctx: int, fits: bool):
-    estimate = estimate_worst_case_prompt_tokens(load_documents(docs_dir), k=3)
+def test_real_corpus_worst_case_prompt_fits_default_num_ctx():
+    docs = load_documents(PROJECT_ROOT / "data" / "docs")
 
-    assert (estimate <= 0.75 * num_ctx) is fits
+    estimate = estimate_worst_case_prompt_tokens(docs, k=3, today=FIXED_TODAY)
+
+    assert estimate <= SHARE * 4096
+
+
+def test_budget_check_fails_when_num_ctx_too_small(docs_dir: Path):
+    # Positive control: proves the comparison above can fail.
+    estimate = estimate_worst_case_prompt_tokens(load_documents(docs_dir), k=3, today=FIXED_TODAY)
+
+    assert estimate > SHARE * 256

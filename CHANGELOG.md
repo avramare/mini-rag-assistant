@@ -16,3 +16,9 @@
   above `MAX_PROMPT_CTX_SHARE` of `NUM_CTX`.
 - check_env: corpus loads and worst-case prompt fits the context budget.
 - Tests: applied 4 test-reviewer findings, added refusal-path, retry-context, uncited, date and truncation tests. 51 tests.
+
+### Review round 2
+- Retrieval index cached on disk, keyed by embedding model + doc texts (cold ~6 s -> cached ~8 ms).
+- `supersedes` frontmatter; loader rejects a newer version that is less strict or not dated later.
+- Tests: budget check on the real corpus, exact-result clearance tests, restricted-citation test,
+  retry leak check, truncation across retry, cache invalidation; `security` marker on access tests. 67 tests.

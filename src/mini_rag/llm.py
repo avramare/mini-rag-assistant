@@ -34,6 +34,8 @@ class LLMClient(Protocol):
 
 
 class Embedder(Protocol):
+    embed_model: str  # part of the index cache key: another model means other vectors
+
     def embed(self, texts: list[str]) -> np.ndarray: ...
 
 
@@ -123,8 +125,9 @@ class FakeEmbedder:
     Uses md5 (not Python's `hash()`, which is randomized per process) to pick a bucket per token.
     """
 
-    def __init__(self, dim: int = 256) -> None:
+    def __init__(self, dim: int = 256, embed_model: str = "fake-embedder") -> None:
         self.dim = dim
+        self.embed_model = embed_model
 
     def embed(self, texts: list[str]) -> np.ndarray:
         out = np.zeros((len(texts), self.dim))

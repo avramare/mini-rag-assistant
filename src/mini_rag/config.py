@@ -29,3 +29,4 @@ class Settings(BaseSettings):
 
     docs_dir: Path = PROJECT_ROOT / "data" / "docs"
     users_file: Path = PROJECT_ROOT / "data" / "users.yaml"
+    cache_dir: Path = PROJECT_ROOT / ".cache"

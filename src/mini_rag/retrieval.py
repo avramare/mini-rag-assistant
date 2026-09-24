@@ -2,9 +2,15 @@
 
 Security invariant: the access filter runs BEFORE ranking. Documents the user may not read are
 never scored, so they cannot reach the prompt, and the user still gets up to k permitted results.
+
+The index holds ALL docs (the filter runs per query), so the optional on-disk cache contains
+embeddings of restricted docs too. Vectors are not text, but keep `.cache/` out of git.
 """
 
+import hashlib
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -24,12 +30,33 @@ def _normalize(m: np.ndarray) -> np.ndarray:
     return m / np.where(norms == 0, 1.0, norms)
 
 
+def index_key(texts: list[str], embed_model: str) -> str:
+    """Hash of everything the vectors depend on: the model and the exact texts, in order.
+    Any doc edit or model change gives a new key, so a stale index is never reused."""
+    return hashlib.sha256(json.dumps([embed_model, texts]).encode()).hexdigest()
+
+
 class Retriever:
-    def __init__(self, docs: list[Document], embedder: Embedder) -> None:
+    def __init__(self, docs: list[Document], embedder: Embedder,
+                 cache_dir: Path | None = None) -> None:
         self._docs = list(docs)
         self._embedder = embedder
         texts = [f"{d.title}\n{d.body}" for d in self._docs]
-        self._matrix = _normalize(embedder.embed(texts)) if texts else np.zeros((0, 0))
+        self._matrix = (_normalize(self._embed_docs(texts, cache_dir)) if texts
+                        else np.zeros((0, 0)))
+
+    def _embed_docs(self, texts: list[str], cache_dir: Path | None) -> np.ndarray:
+        if cache_dir is None:
+            return self._embedder.embed(texts)
+        path = cache_dir / f"index-{index_key(texts, self._embedder.embed_model)}.npy"
+        if path.exists():
+            return np.load(path)
+        vectors = self._embedder.embed(texts)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp.npy")
+        np.save(tmp, vectors)
+        tmp.replace(path)  # atomic: a crash mid-write never leaves a half-written index
+        return vectors
 
     def search(self, query: str, user: User, k: int = 3) -> list[Hit]:
         allowed = [i for i, d in enumerate(self._docs) if user.can_read(d.access)]

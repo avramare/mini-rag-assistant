@@ -98,12 +98,11 @@ def parse_answer(raw: str) -> Answer | None:
         return None
 
 
-def estimate_worst_case_prompt_tokens(docs: list[Document], k: int) -> int:
+def estimate_worst_case_prompt_tokens(docs: list[Document], k: int, today: date) -> int:
     """Pessimistic token estimate for the largest prompt we can send: the k longest docs
     (ignoring access, so it covers every user), a long question, and the retry note."""
     longest = sorted(docs, key=lambda d: len(_doc_header(d)) + len(d.body), reverse=True)[:k]
-    prompt = build_prompt("x" * QUESTION_ALLOWANCE_CHARS, [Hit(d, 0.0) for d in longest],
-                          date.today())
+    prompt = build_prompt("x" * QUESTION_ALLOWANCE_CHARS, [Hit(d, 0.0) for d in longest], today)
     return math.ceil(len(SYSTEM_PROMPT + prompt + RETRY_NOTE) / CHARS_PER_TOKEN)
 
 
@@ -175,7 +174,7 @@ def main() -> None:
     s = Settings()
     client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx)
     t0 = time.perf_counter()
-    retriever = Retriever(load_documents(s.docs_dir), client)
+    retriever = Retriever(load_documents(s.docs_dir), client, cache_dir=s.cache_dir)
     t1 = time.perf_counter()
     assistant = Assistant(retriever, client, num_ctx=s.num_ctx,
                           max_prompt_ctx_share=s.max_prompt_ctx_share)
