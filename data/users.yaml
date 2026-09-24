@@ -1,0 +1,6 @@
+# clearance = access levels the user may read
+users:
+  analyst:
+    clearance: [public]
+  lead:
+    clearance: [public, restricted]
