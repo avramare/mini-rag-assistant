@@ -17,6 +17,8 @@ the user is allowed to see, cite them, and refuse when the context does not cont
 - Ollama (local) for generation, embeddings and the LLM judge. Model names come from `.env`, never hard-coded.
 - Langfuse (Python SDK) for tracing, datasets, experiments and scores. **Check the current Langfuse SDK docs
   before writing integration code** — the API has changed between major versions.
+  Our Langfuse Cloud org is v4-only: the legacy `/api/public/traces` API returns 410. Read data with
+  `api.observations.get_many(...)` (`GET /api/public/v2/observations`) or `/api/public/v2/metrics`.
 - OS: Windows (PowerShell). Use `pathlib`, no bash-only commands in scripts or docs.
 
 ## Architecture
@@ -62,6 +64,8 @@ Validate with pydantic. Invalid JSON is a failure that gets counted, not silentl
 - Do not weaken or delete a failing test without saying so explicitly and explaining why.
 - Never read or print `.env`. Never log secrets. Never put real personal data in fixtures.
 - Keep the app small. If a feature is not needed by a test or eval, do not add it.
+- Status of the environment (`.env`, models, services) must come from `uv run python scripts/check_env.py`
+  run in the same turn, never from earlier reports, STATUS.md or memory.
 
 ## Commands
 ```powershell

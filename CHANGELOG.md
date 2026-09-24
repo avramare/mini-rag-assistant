@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-25 - Phase 2: tracing
+- `tracing.py`: one Langfuse trace per `answer()` (root `answer` span, `retrieval` retriever span, one
+  `generation` per attempt with model and token usage). `NoopTracer` unless both Langfuse keys are set.
+- Restricted masking: if any retrieved doc is restricted, question, prompt and outputs become
+  `[masked: restricted context, N chars]`; ids, access levels, tokens, durations and flags stay (DECISIONS 18).
+- CLI traces and flushes; `check_env` adds a Langfuse auth check.
+- Run config on every trace (never masked): gen/embed model, k, num_ctx, SYSTEM_PROMPT sha256, corpus sha256
+  (= retrieval index cache key); optional `dataset_item_id` for Phase 3.
+- Security tests run a real Langfuse client into an in-memory OTel exporter and assert neither codename nor
+  budget figure is exported, with a public-only positive control and a network-request guard. Five masking/config
+  mutations each killed. 82 tests, < 1 s.
+- CLAUDE.md: environment status must come from `check_env.py` run in the same turn.
+
 ## 2026-09-24 – Phase 0 + 1
 - uv project (Python 3.12), pytest + ruff config, markers `security`/`eval`, `eval` excluded by default.
 - `scripts/check_env.py`: .env, model names, Ollama reachability, pulled models, Langfuse keys.

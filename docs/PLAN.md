@@ -46,6 +46,12 @@ Work phase by phase. Finish acceptance criteria before moving on. Start each pha
   - `citations_valid` – cited ids were retrieved and are allowed for the user
   - `judge_faithfulness` – LLM judge, 1–5 with a written rubric, pass >= 4
 - An item passes only if all applicable evaluators pass.
+- **Langfuse read API (found in Phase 2):** our Langfuse Cloud org is v4-only. The legacy
+  `GET /api/public/traces` returns 410 (`LEGACY_API_UNAVAILABLE_FOR_NEW_ORGANIZATION`) and is sunset for
+  all orgs on 2026-11-16. Anything that reads traces back uses `langfuse.api.observations.get_many(...)`
+  (`GET /api/public/v2/observations`, filter by time range, `trace_id`, `user_id`, `name`; request the
+  `io`, `metadata`, `usage` field groups explicitly) or `/api/public/v2/metrics`. Only these two are live;
+  other public APIs can lag by minutes, so do not read scores back right after writing them in a test.
 
 **Done when:** one experiment run is visible and comparable in Langfuse.
 

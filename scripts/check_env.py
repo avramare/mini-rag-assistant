@@ -64,12 +64,27 @@ def main() -> int:
     except DocumentError as exc:
         report(False, "corpus loads", str(exc))
 
-    for name, secret in {
-        "LANGFUSE_PUBLIC_KEY": s.langfuse_public_key,
-        "LANGFUSE_SECRET_KEY": s.langfuse_secret_key,
-    }.items():
-        report(bool(secret.get_secret_value()), f"{name} is set",
+    keys = {
+        "LANGFUSE_PUBLIC_KEY": s.langfuse_public_key.get_secret_value(),
+        "LANGFUSE_SECRET_KEY": s.langfuse_secret_key.get_secret_value(),
+    }
+    for name, value in keys.items():
+        report(bool(value), f"{name} is set",
                "create keys in Langfuse project settings (needed from Phase 2)")
+
+    if all(keys.values()):
+        from langfuse import Langfuse  # imported here: slow import, only needed with keys
+
+        try:
+            client = Langfuse(public_key=keys["LANGFUSE_PUBLIC_KEY"],
+                              secret_key=keys["LANGFUSE_SECRET_KEY"], base_url=s.langfuse_host)
+            auth_ok = client.auth_check()
+        except Exception as exc:  # the SDK raises different errors for bad keys, DNS, timeouts
+            auth_ok, reason = False, type(exc).__name__
+        else:
+            reason = "keys rejected"
+        report(auth_ok, f"Langfuse auth ok at {s.langfuse_host}",
+               f"check keys and LANGFUSE_HOST ({reason})")
 
     print("\nAll checks passed." if problems == 0 else f"\n{problems} problem(s) found.")
     return 1 if problems else 0

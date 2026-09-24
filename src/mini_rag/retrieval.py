@@ -41,14 +41,18 @@ class Retriever:
                  cache_dir: Path | None = None) -> None:
         self._docs = list(docs)
         self._embedder = embedder
+        self.embed_model = embedder.embed_model
         texts = [f"{d.title}\n{d.body}" for d in self._docs]
+        # Same value as the index cache key: identifies the exact corpus + embedding model.
+        # Recorded with every trace and eval run so runs over different corpora are never mixed.
+        self.corpus_hash = index_key(texts, self.embed_model)
         self._matrix = (_normalize(self._embed_docs(texts, cache_dir)) if texts
                         else np.zeros((0, 0)))
 
     def _embed_docs(self, texts: list[str], cache_dir: Path | None) -> np.ndarray:
         if cache_dir is None:
             return self._embedder.embed(texts)
-        path = cache_dir / f"index-{index_key(texts, self._embedder.embed_model)}.npy"
+        path = cache_dir / f"index-{self.corpus_hash}.npy"
         if path.exists():
             return np.load(path)
         vectors = self._embedder.embed(texts)
