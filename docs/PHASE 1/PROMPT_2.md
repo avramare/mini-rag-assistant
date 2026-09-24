@@ -1,7 +1,3 @@
-Marko's review on Phase 0 and Phase 1 implementation:
-- Corrected repo root folder name to `mini-rag-assistant` with correct `.env` file, also skills and agents from `.claude/` should work correct. 
-- Reviewed draft corpus in `data/docs/`
-
 Decisions on the review:
 - Apply all 4 test-reviewer findings.
 - Missing test 1: an answer with no citations and refused=false is rejected by the app and turned into a refusal
