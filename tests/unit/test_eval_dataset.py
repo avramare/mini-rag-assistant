@@ -47,7 +47,10 @@ def test_draft_versioning_asks_orion_on_both_sides_of_v2_effective_date():
     (dataset_item("x", "analyst", "Is it 27 days of holiday?", expected=[["twenty", "27 days"]]),
      "question contains its own fact '27 days'"),
     (dataset_item("x", "analyst", "Q?", expected=[[]]), "non-empty"),
-], ids=["category-typo", "unknown-user", "refuse-with-facts", "answer-in-question", "empty-fact"])
+    (dataset_item("x", "lead", "Q?", category="versioning", expected=["4.2 million"]),
+     "versioning items need forbidden_facts"),
+], ids=["category-typo", "unknown-user", "refuse-with-facts", "answer-in-question", "empty-fact",
+        "versioning-without-wrong-version"])
 def test_invalid_item_is_rejected_with_reason(tmp_path: Path, item: dict, reason: str):
     path = write_dataset(tmp_path / "d.jsonl", [item])
 

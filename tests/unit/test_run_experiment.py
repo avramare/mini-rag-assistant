@@ -40,7 +40,8 @@ class Env:
         write_dataset(self.tmp_path / "d.jsonl", [
             dataset_item("hol", "analyst", HOLIDAY_Q, expected=["27 days"]),
             dataset_item("orion", "lead", orion_question, category="versioning",
-                         expected=orion_facts or ["4.2 million"], as_of="2027-03-01"),
+                         expected=orion_facts or ["4.2 million"], forbidden=["5 million"],
+                         as_of="2027-03-01"),
         ])
         self.dataset = load_dataset(self.tmp_path / "d.jsonl", set(self.users))
         return self.dataset

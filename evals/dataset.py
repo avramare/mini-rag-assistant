@@ -137,6 +137,11 @@ def _check_item(item: DatasetItem, known_users: set[str], where: str) -> None:
         raise DatasetError(f"{where}: unknown user '{item.user}'")
     if item.should_refuse and item.expected_facts:
         raise DatasetError(f"{where}: should_refuse items cannot have expected_facts")
+    if item.category == "versioning" and not item.forbidden_facts:
+        # The value of the version NOT in force (superseded or not yet effective) is what a wrong
+        # answer contains. `forbidden_absent` then catches it independently of the judge.
+        raise DatasetError(f"{where}: versioning items need forbidden_facts (the value of the "
+                           "version not in force on as_of)")
     question = normalize(item.question)
     for fact in item.expected_facts + item.forbidden_facts:
         for variant in variants(fact):
