@@ -121,7 +121,8 @@ def test_judge_reason_quoting_restricted_answer_is_masked(wire_and_publisher):
     wire, publisher = wire_and_publisher
     reason = f"The answer states 4.2 million and {RESTRICTED_SECRET}, as the context does."
 
-    publish_scores(publisher, record(True, "4.2 million"), judged(reason), passed=True)
+    publish_scores(publisher, record(True, "4.2 million"), judged(reason), passed=True,
+                   judge_key="abc")
     publisher.flush()
 
     sent = wire.sent()
@@ -134,7 +135,7 @@ def test_judge_reason_for_public_context_is_sent_unmasked(wire_and_publisher):
     wire, publisher = wire_and_publisher
 
     publish_scores(publisher, record(False, "27 days"),
-                   judged("The answer says 27 days, as stated."), passed=True)
+                   judged("The answer says 27 days, as stated."), passed=True, judge_key="abc")
     publisher.flush()
 
     assert "The answer says 27 days, as stated." in wire.sent()

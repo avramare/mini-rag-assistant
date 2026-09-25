@@ -13,6 +13,9 @@ from evals.results import (
 )
 from evals.stats import NotComparableError, category_rates, compare, overall_rate, report
 
+JUDGE = {"model": "qwen3:4b", "digest": None, "prompt_sha256": "abcdef123456" + "0" * 52,
+         "pass_score": 4}
+
 CONFIG = {
     "name": "base", "as_of": "2026-09-01", "repeats": 2,
     "dataset": {"name": "t", "sha256": "d" * 64, "generation_key": "g" * 64},
@@ -44,9 +47,9 @@ def make_run(passes: dict[str, list[bool]], categories: dict[str, str],
                                                 results=failed or [EvalResult(
                                                     name="schema_valid", applicable=True,
                                                     passed=True)]))
-    return RunResults(config=copy.deepcopy(CONFIG), answers=answers, evaluation=Evaluation(
-        evaluated_at=datetime.now(UTC), dataset_sha256="d" * 64, judge=None,
-        answers=evaluations))
+    return RunResults(config=copy.deepcopy(CONFIG), answers=answers, evaluations={
+        "no-judge": Evaluation(evaluated_at=datetime.now(UTC), dataset_sha256="d" * 64,
+                               judge=None, answers=evaluations)})
 
 
 def rows(text: str) -> list[list[str]]:
@@ -88,7 +91,7 @@ def test_report_shows_versioning_category_and_run_health_counters():
 def test_report_splits_failing_items_into_retrieval_miss_and_generation_failure():
     run = make_run({"a": [False], "b": [False], "d": [True]}, CATEGORIES)
     recall = {"a": False, "b": True, "d": False}  # d: retrieval missed but the answer passed
-    for ev in run.evaluation.answers:
+    for ev in run.evaluation()[1].answers:
         ev.results.append(EvalResult(name="retrieval_recall", applicable=True,
                                      passed=recall[ev.item_id], gating=False))
 
@@ -99,6 +102,36 @@ def test_report_splits_failing_items_into_retrieval_miss_and_generation_failure(
     assert ["b", "factual", "0.0%", "facts_recall", "x1", "|", "retrieval", "ok"] in rows(text)
     assert not any(row[:1] == ["d"] for row in rows(text))  # a diagnostic miss is not a failure
     assert "retrieval_recall 3 2 diagnostic, not in pass rate" in " ".join(text.split())
+
+
+def test_report_names_the_judge_version_and_the_other_stored_versions():
+    run = make_run(PASSES, CATEGORIES)
+    later = make_run({item: [True, True] for item in PASSES}, CATEGORIES).evaluation()[1]
+    later.judge = JUDGE
+    later.evaluated_at = later.evaluated_at.replace(year=2099)
+    run.evaluations["abcdef123456"] = later
+
+    latest, older = report(run), report(run, judge="no-")
+
+    assert "judge qwen3:4b prompt abcdef123456" in latest
+    assert "also stored: no-judge" in latest
+    assert "n = 4 items): 100.0%" in latest  # the numbers come from the named version
+    assert "judge none" in older and "also stored: abcdef123456" in older
+    assert "n = 4 items):  62.5%" in older
+
+
+def test_results_file_with_a_single_evaluation_loads_under_its_judge_version():
+    # Files written before evaluations were keyed must still load, with nothing lost.
+    run = make_run(PASSES, CATEGORIES)
+    old_format = run.model_dump(mode="json")
+    evaluation = old_format.pop("evaluations")["no-judge"]
+    evaluation["judge"] = JUDGE
+    old_format["evaluation"] = evaluation
+
+    loaded = RunResults.model_validate(old_format)
+
+    assert list(loaded.evaluations) == ["abcdef123456"]
+    assert overall_rate(loaded) == overall_rate(run)
 
 
 def test_compare_refuses_runs_with_different_as_of():
@@ -113,7 +146,7 @@ def test_compare_refuses_runs_with_different_as_of():
 def test_compare_refuses_runs_graded_against_different_facts():
     base = make_run(PASSES, CATEGORIES)
     candidate = make_run(PASSES, CATEGORIES)
-    candidate.evaluation.dataset_sha256 = "e" * 64
+    candidate.evaluation()[1].dataset_sha256 = "e" * 64
 
     with pytest.raises(NotComparableError, match="different dataset facts"):
         compare(base, candidate)

@@ -23,6 +23,8 @@ ORION = json.dumps({"answer": "4.2 million euros.", "citations": ["orion-budget"
                     "refused": False})
 JUDGE_OK = json.dumps({"reason": "Supported.", "score": 5})
 JUDGE_BAD = json.dumps({"reason": "Not supported.", "score": 2})
+JUDGE_V1 = {"model": "fake-judge", "digest": None, "prompt_sha256": "1" * 64, "pass_score": 4}
+JUDGE_V2 = JUDGE_V1 | {"prompt_sha256": "2" * 64}
 
 
 class Env:
@@ -61,9 +63,10 @@ class Env:
                        NoopPublisher(), resume=resume, log=lambda _: None)
         return run, llm
 
-    def evaluate(self, judge: FakeLLM | None):
+    def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None):
         corpus = Corpus({d.id: d for d in load_documents(self.docs_dir)}, self.users)
-        return evaluate(self.path, self.dataset, corpus, judge, None, NoopPublisher(),
+        return evaluate(self.path, self.dataset, corpus, judge,
+                        judge_info or (JUDGE_V1 if judge else None), NoopPublisher(),
                         log=lambda _: None)
 
 
@@ -123,9 +126,25 @@ def test_judge_rerun_regrades_saved_answers_without_regenerating(env: Env):
     second = env.evaluate(FakeLLM([JUDGE_BAD] * 4))
 
     assert second.answers == generated.answers  # untouched by pass 2
-    assert all(ev.passed for ev in first.evaluation.answers)
-    assert not any(ev.passed for ev in second.evaluation.answers)  # judge verdict replaced
-    assert load(env.path).evaluation == second.evaluation
+    assert all(ev.passed for ev in first.evaluation()[1].answers)
+    # Same judge version: its verdict is replaced, not stored twice.
+    assert list(second.evaluations) == ["111111111111"]
+    assert not any(ev.passed for ev in second.evaluation()[1].answers)
+    assert load(env.path).evaluations == second.evaluations
+
+
+def test_new_judge_version_is_stored_next_to_the_old_one(env: Env):
+    # Losing the old judge's grades would make a judge change impossible to compare.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_BAD] * 4), JUDGE_V1)
+
+    run = env.evaluate(FakeLLM([JUDGE_OK] * 4), JUDGE_V2)
+
+    saved = load(env.path)
+    assert set(saved.evaluations) == {"111111111111", "222222222222"}
+    assert not any(ev.passed for ev in saved.evaluations["111111111111"].answers)
+    assert all(ev.passed for ev in saved.evaluations["222222222222"].answers)
+    assert run.evaluation()[0] == "222222222222"  # latest is the default for reports
 
 
 def test_evaluate_refuses_a_changed_corpus(env: Env):
@@ -142,9 +161,9 @@ def test_evaluate_refuses_changed_questions_but_regrades_changed_facts(env: Env)
     old_sha = env.dataset.sha256
 
     env.write_items(ORION_Q, orion_facts=["BLUEHERON"])
-    run = env.evaluate(None)
-    assert run.evaluation.dataset_sha256 != old_sha
-    assert not any(ev.passed for ev in run.evaluation.answers if ev.item_id == "orion")
+    _, evaluation = env.evaluate(None).evaluation()
+    assert evaluation.dataset_sha256 != old_sha
+    assert not any(ev.passed for ev in evaluation.answers if ev.item_id == "orion")
 
     env.write_items("What did the board approve for Orion?")
     with pytest.raises(RunError, match="regenerate"):

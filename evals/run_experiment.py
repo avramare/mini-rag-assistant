@@ -35,6 +35,7 @@ from evals.results import (
     AnswerRecord,
     Evaluation,
     RunResults,
+    evaluation_key,
     load,
     results_path,
     save,
@@ -144,11 +145,13 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
             log(f"[{n}/{len(run.answers)}] {record.item_id} r{record.repeat} "
                 f"{'pass' if evaluations[-1].passed else 'FAIL'}")
 
-    run.evaluation = Evaluation(evaluated_at=datetime.now(UTC), dataset_sha256=dataset.sha256,
-                                judge=judge_info, answers=evaluations)
+    key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
+    run.evaluations[key] = Evaluation(evaluated_at=datetime.now(UTC),
+                                      dataset_sha256=dataset.sha256, judge=judge_info,
+                                      answers=evaluations)
     save(run, path)  # local results first: a Langfuse outage must not lose the grading
     for record, ev in zip(run.answers, evaluations, strict=True):
-        publish_scores(publisher, record, ev.results, ev.passed)
+        publish_scores(publisher, record, ev.results, ev.passed, key)
     return run
 
 

@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from mini_rag.assistant import Answer, AnswerResult
 from mini_rag.documents import Access
@@ -91,13 +91,46 @@ class Evaluation(BaseModel):
     answers: list[AnswerEvaluation]
 
 
+NO_JUDGE = "no-judge"
+
+
+def evaluation_key(judge: dict[str, Any] | None) -> str:
+    """Evaluations are stored per judge prompt version: re-running the same prompt overwrites its
+    own evaluation, a new prompt is stored next to the old one (and so are its Langfuse scores)."""
+    return judge["prompt_sha256"][:12] if judge else NO_JUDGE
+
+
 class RunResults(BaseModel):
     config: dict[str, Any]
     answers: list[AnswerRecord] = []
-    evaluation: Evaluation | None = None
+    evaluations: dict[str, Evaluation] = {}  # evaluation_key -> evaluation
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_evaluation_to_keyed(cls, data: Any) -> Any:
+        """Files written before evaluations were keyed hold a single `evaluation`."""
+        if isinstance(data, dict) and "evaluation" in data:
+            data = dict(data)
+            old = data.pop("evaluation")
+            if old is not None:
+                judge = old.judge if isinstance(old, Evaluation) else old.get("judge")
+                data["evaluations"] = {evaluation_key(judge): old, **data.get("evaluations", {})}
+        return data
 
     def done(self) -> set[tuple[str, int]]:
         return {(a.item_id, a.repeat) for a in self.answers}
+
+    def evaluation(self, key: str | None = None) -> tuple[str, Evaluation]:
+        """The evaluation stored under `key` (a unique prefix is enough); the latest without one."""
+        if not self.evaluations:
+            raise ValueError("run has no evaluation yet; run `evaluate` first")
+        if key is None:
+            return max(self.evaluations.items(), key=lambda kv: kv[1].evaluated_at)
+        matches = [k for k in self.evaluations if k.startswith(key)]
+        if len(matches) != 1:
+            raise ValueError(f"judge version {key!r} matches {matches or 'nothing'}; "
+                             f"stored: {sorted(self.evaluations)}")
+        return matches[0], self.evaluations[matches[0]]
 
 
 def results_path(name: str, results_dir: Path = RESULTS_DIR) -> Path:

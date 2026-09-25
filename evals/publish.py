@@ -26,7 +26,8 @@ class Publisher(Protocol):
     def link(self, dataset: Dataset, item: DatasetItem, run_name: str, trace_id: str,
              metadata: dict[str, Any]) -> None: ...
 
-    def score(self, trace_id: str, name: str, value: float, comment: str) -> None: ...
+    def score(self, trace_id: str, name: str, value: float, comment: str, score_id: str,
+              metadata: dict[str, str] | None) -> None: ...
 
     def flush(self) -> None: ...
 
@@ -41,7 +42,8 @@ class NoopPublisher:
              metadata: dict[str, Any]) -> None:
         return None
 
-    def score(self, trace_id: str, name: str, value: float, comment: str) -> None:
+    def score(self, trace_id: str, name: str, value: float, comment: str, score_id: str,
+              metadata: dict[str, str] | None) -> None:
         return None
 
     def flush(self) -> None:
@@ -84,23 +86,42 @@ class LangfusePublisher:
             trace_id=trace_id, metadata=metadata,
         )
 
-    def score(self, trace_id: str, name: str, value: float, comment: str) -> None:
-        # Deterministic id: re-running the judge overwrites its old score instead of adding one.
-        score_id = hashlib.sha256(f"{trace_id}:{name}".encode()).hexdigest()[:32]
+    def score(self, trace_id: str, name: str, value: float, comment: str, score_id: str,
+              metadata: dict[str, str] | None) -> None:
         self._client.create_score(trace_id=trace_id, name=name, value=value,
-                                  data_type="NUMERIC", comment=comment, score_id=score_id)
+                                  data_type="NUMERIC", comment=comment, score_id=score_id,
+                                  metadata=metadata)
 
     def flush(self) -> None:
         self._client.flush()
 
 
+# Scores whose value depends on the judge; the others depend only on the answer and the facts.
+JUDGE_DEPENDENT_SCORES = frozenset({"judge_faithfulness", "item_pass"})
+
+
+def score_id(trace_id: str, name: str, judge_key: str) -> str:
+    """Deterministic, so re-publishing overwrites a score instead of adding one. Judge-dependent
+    scores also key on the judge version: the same prompt overwrites its own scores, a new prompt
+    adds its scores next to the old ones. Code evaluator ids stay as before (trace + name)."""
+    parts = [trace_id, name, judge_key] if name in JUDGE_DEPENDENT_SCORES else [trace_id, name]
+    return hashlib.sha256(":".join(parts).encode()).hexdigest()[:32]
+
+
 def publish_scores(publisher: Publisher, record: AnswerRecord, results: list[EvalResult],
-                   passed: bool) -> None:
+                   passed: bool, judge_key: str) -> None:
     if record.trace_id is None:  # generated without tracing: nothing to attach scores to
         return
+    trace_id = record.trace_id
+
+    def send(name: str, value: float, comment: str) -> None:
+        metadata = {"judge": judge_key} if name in JUDGE_DEPENDENT_SCORES else None
+        publisher.score(trace_id, name, value, comment, score_id(trace_id, name, judge_key),
+                        metadata)
+
     for r in results:
         if r.applicable:
             value = r.value if r.value is not None else float(bool(r.passed))
             # The judge's reason can quote the answer, so it is masked exactly like the trace.
-            publisher.score(record.trace_id, r.name, value, mask_text(r.detail, record.masked))
-    publisher.score(record.trace_id, "item_pass", float(passed), "")
+            send(r.name, value, mask_text(r.detail, record.masked))
+    send("item_pass", float(passed), "")
