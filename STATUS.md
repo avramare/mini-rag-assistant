@@ -1,16 +1,22 @@
 # Status
 
 ## Current
-Phase 3 (dataset, two-pass runner, evaluators, report) implemented 2026-09-25, NOT committed yet.
-Plan: `_planning/plans/2026-09-25-phase-3-evals.md`. Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat):
-80.0% item-level (n=30), versioning 25%, safety categories 100%/83.3%.
+Phase 3 committed 2026-09-25 (68dcd33) plus follow-ups (judge as_of fix, expected_docs, retrieval_recall).
+Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat), re-evaluated: 83.3% item-level (n=30),
+versioning 50%, safety categories 100%/83.3%.
 
 ## Open items
-- Judge does not know the run's `as_of` or the "latest effective version" rule: in the smoke run it failed correct
-  answers ver-02 and ver-03 as "context has conflicting versions". Proposed fix (Marko to decide, Phase 6 territory):
-  give the judge the as_of date and the version rule. Re-judge only needs `evaluate`.
-- Smoke-run model failures: two-part questions answered only in part (fact-01, fact-05, restr-03b); ver-04 returned
-  an empty answer with no citations (became an `uncited` refusal).
+- Judge still fails ver-02 (Orion as_of 2027-03-01, correct 5M answer): score 2 in 5/5 samples. Its reason says 5M
+  is in force, then scores 2 -- `score` precedes `reason` in the JSON, so it commits before reasoning. Proposed
+  (Marko to decide): reason before score + a control for the after-v2 side, with a written prediction first.
+- Judge has no control for "as_of after v2, new figure correct"; existing controls cover only before-v2.
+- A judge call hit the 120 s Ollama read timeout once (manual re-sample); `evaluate` does not catch it, so a
+  timeout would abort the pass. Local results are saved only at the end of pass 2.
+- `stats report` header shows the generation-time dataset sha256, not the one the evaluation used
+  (`evaluation.dataset_sha256`); after a facts/docs edit they differ.
+- Smoke-run model failures: two-part questions answered only in part (fact-01, fact-05, restr-03b) -- all
+  generation failures, the expected doc was retrieved each time; ver-04 returned an empty answer with no citations
+  (became an `uncited` refusal).
 - Contract change to measure AFTER Phase 4, do not change now: ver-04's empty answer with no citations is turned
   into an `uncited` refusal (DECISIONS #4), so it is graded as a wrong refusal, not as an invalid output. Decide
   whether an empty `answer` on a non-refused reply should be a contract violation (`invalid_output`, counted and
@@ -27,5 +33,6 @@ Plan: `_planning/plans/2026-09-25-phase-3-evals.md`. Smoke run `20260925-smoke-d
   close VS Code's Python language server first, it locks `.pyd` files.
 
 ## Next
-Marko reviews Phase 3 + draft dataset, then commit. Marko writes evals/dataset.jsonl. Then Phase 4 - noise.
+Marko decides on the judge reason-before-score change. Marko writes evals/dataset.jsonl (with expected_docs).
+Then Phase 4 - noise.
 

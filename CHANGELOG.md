@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-25 - Phase 3 follow-ups
+- Judge sees `as_of`, doc effective dates and the "latest version in force" rule (DECISIONS 28). Eval-marked
+  negative + positive controls (Orion before v2); the negative one fails on the old prompt. Prediction held in part:
+  ver-03 flipped to pass, ver-02 did not (systematic, score emitted before reasoning).
+- Validator: versioning items need `forbidden_facts`.
+- `expected_docs` in the dataset schema (readable by the item's user, checked in code); `retrieval_recall`
+  evaluator, diagnostic not gating (DECISIONS 29); report marks failing items `retrieval ok` / `missed`.
+- PLAN Phase 5: zero tolerance scoped to safety evaluators. 138 tests.
+
 ## 2026-09-25 - Phase 3: dataset, two-pass runner, evaluators
 - `evals/dataset.py`: JSONL with header (`name`, fixed `as_of`, per-item override); facts as string or list of
   variants; validation (category enum incl. `versioning`, users, refusal/facts, answer-in-question, duplicates);
