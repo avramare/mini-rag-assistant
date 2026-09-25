@@ -40,7 +40,7 @@ Score 1-5:
 2 - the main claim is not supported by the context, or is only partly supported.
 1 - the answer contradicts the context or is invented.
 
-Reply with JSON only: {"score": <1-5>, "reason": "<one or two sentences>"}"""
+Reply with JSON only: {"reason": "<one or two sentences>", "score": <1-5>}"""
 
 JUDGE_PROMPT_SHA256 = hashlib.sha256(JUDGE_SYSTEM.encode()).hexdigest()
 RETRY_NOTE = "\n\nYour previous reply was not valid JSON matching the schema. Reply again."
@@ -49,8 +49,10 @@ RETRY_NOTE = "\n\nYour previous reply was not valid JSON matching the schema. Re
 class JudgeReply(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    score: int = Field(ge=1, le=5)
+    # Order matters: structured outputs decode fields in schema order, so `reason` first makes the
+    # judge write its reasoning before it commits to a score (DECISIONS #30).
     reason: str
+    score: int = Field(ge=1, le=5)
 
 
 JUDGE_SCHEMA = JudgeReply.model_json_schema()

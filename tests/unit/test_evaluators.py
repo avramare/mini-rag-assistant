@@ -144,7 +144,7 @@ def test_retrieval_miss_is_diagnostic_and_does_not_fail_a_correct_answer(corpus)
 
 
 def judge_reply(score: int, reason: str = "Supported.") -> str:
-    return json.dumps({"score": score, "reason": reason})
+    return json.dumps({"reason": reason, "score": score})
 
 
 @pytest.mark.parametrize("score, passed", [(4, True), (3, False)])
@@ -175,6 +175,18 @@ def test_judge_sees_as_of_and_effective_dates_to_tell_versions_apart(corpus):
     assert "AS OF: 2026-07-15" in prompt
     assert "[doc id: holiday-policy] Holiday policy (effective 2026-06-01)" in prompt
     assert "latest version in force on the AS OF date" in " ".join(system.split())
+
+
+def test_judge_schema_asks_for_reason_before_score(corpus):
+    # Structured outputs decode fields in schema order. Score first made the judge commit before
+    # reasoning: ver-02 got 2 while its own reason said the answer was right (DECISIONS #30).
+    llm = FakeLLM([judge_reply(5)])
+
+    judge_faithfulness(record(), corpus.docs, llm)
+
+    assert list(llm.schemas[0]["properties"]) == ["reason", "score"]
+    system = llm.calls[0][0]
+    assert system.index('"reason"') < system.index('"score"')
 
 
 def test_judge_invalid_twice_is_counted_as_failed_judge_error(corpus):

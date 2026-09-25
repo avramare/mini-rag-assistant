@@ -21,8 +21,8 @@ ORION_Q = "What is the Orion project budget?"
 HOLIDAY = json.dumps({"answer": "27 days.", "citations": ["holiday-policy"], "refused": False})
 ORION = json.dumps({"answer": "4.2 million euros.", "citations": ["orion-budget"],
                     "refused": False})
-JUDGE_OK = json.dumps({"score": 5, "reason": "Supported."})
-JUDGE_BAD = json.dumps({"score": 2, "reason": "Not supported."})
+JUDGE_OK = json.dumps({"reason": "Supported.", "score": 5})
+JUDGE_BAD = json.dumps({"reason": "Not supported.", "score": 2})
 
 
 class Env:
