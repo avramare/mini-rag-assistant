@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from evals.results import AnswerRecord, EvalResult
 from mini_rag.assistant import doc_header
 from mini_rag.documents import Document
-from mini_rag.llm import LLMClient
+from mini_rag.llm import LLMClient, LLMTimeoutError
 
 PASS_SCORE = 4
 
@@ -70,20 +70,28 @@ def judge_prompt(record: AnswerRecord, docs: dict[str, Document]) -> str:
 def judge_faithfulness(record: AnswerRecord, docs: dict[str, Document],
                        llm: LLMClient) -> EvalResult:
     """Applicable to answers the user saw as an answer (not refusals, not failures).
-    One retry on invalid output; a second failure is a `judge_error` and counts as a fail."""
+    One retry on invalid output or a timeout; a second failure is a `judge_error` and counts as a
+    fail. Failed attempts are kept in `attempt_errors`, so the report can count timeouts even when
+    the retry succeeded."""
     if record.answer is None or record.answer.refused:
         return EvalResult(name="judge_faithfulness", applicable=False)
     prompt = judge_prompt(record, docs)
-    for attempt in range(2):
-        text = llm.generate(JUDGE_SYSTEM, prompt if attempt == 0 else prompt + RETRY_NOTE,
-                            JUDGE_SCHEMA).text
+    errors: list[str] = []  # one entry per failed attempt: "timeout" or "invalid_output"
+    for _ in range(2):
+        note = RETRY_NOTE if errors[-1:] == ["invalid_output"] else ""
+        try:
+            text = llm.generate(JUDGE_SYSTEM, prompt + note, JUDGE_SCHEMA).text
+        except LLMTimeoutError:
+            errors.append("timeout")
+            continue
         try:
             reply = JudgeReply.model_validate(json.loads(text))
         except (json.JSONDecodeError, ValidationError):
+            errors.append("invalid_output")
             continue
-        retry = " (after retry)" if attempt else ""
+        retry = f" (after retry: {errors[0]})" if errors else ""
         return EvalResult(name="judge_faithfulness", applicable=True,
                           passed=reply.score >= PASS_SCORE, value=reply.score,
-                          detail=reply.reason + retry)
+                          detail=reply.reason + retry, attempt_errors=errors)
     return EvalResult(name="judge_faithfulness", applicable=True, passed=False,
-                      detail="judge_error: invalid output twice")
+                      detail="judge_error: " + ", ".join(errors), attempt_errors=errors)

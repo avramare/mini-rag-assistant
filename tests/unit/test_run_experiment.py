@@ -9,9 +9,10 @@ from evals.evaluators import Corpus
 from evals.publish import NoopPublisher
 from evals.results import load
 from evals.run_experiment import RunError, build_config, evaluate, generate
+from evals.stats import report
 from mini_rag.assistant import Assistant
 from mini_rag.documents import load_documents
-from mini_rag.llm import FakeEmbedder, FakeLLM
+from mini_rag.llm import FakeEmbedder, FakeLLM, LLMTimeoutError
 from mini_rag.retrieval import Retriever
 from mini_rag.users import User
 from tests.helpers import dataset_item, write_dataset, write_doc
@@ -63,11 +64,12 @@ class Env:
                        NoopPublisher(), resume=resume, log=lambda _: None)
         return run, llm
 
-    def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None):
+    def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None,
+                 resume: bool = False):
         corpus = Corpus({d.id: d for d in load_documents(self.docs_dir)}, self.users)
         return evaluate(self.path, self.dataset, corpus, judge,
                         judge_info or (JUDGE_V1 if judge else None), NoopPublisher(),
-                        log=lambda _: None)
+                        resume=resume, log=lambda _: None)
 
 
 @pytest.fixture
@@ -176,3 +178,64 @@ def test_evaluate_refuses_an_incomplete_run(env: Env):
 
     with pytest.raises(RunError, match="3 answers missing"):
         env.evaluate(None)
+
+
+def test_judge_timeout_mid_run_becomes_one_counted_judge_error_and_the_run_finishes(env: Env):
+    # Before: an Ollama read timeout escaped evaluate and aborted the whole pass.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    judge = FakeLLM([JUDGE_OK, LLMTimeoutError("slow"), LLMTimeoutError("slow"), JUDGE_OK,
+                     LLMTimeoutError("slow"), JUDGE_OK])
+
+    run = env.evaluate(judge)
+
+    _, evaluation = load(env.path).evaluation()
+    assert evaluation.finished_at is not None
+    assert [ev.passed for ev in evaluation.answers] == [True, False, True, True]
+    judged = [r for ev in evaluation.answers for r in ev.results
+              if r.name == "judge_faithfulness"]
+    assert judged[1].detail == "judge_error: timeout, timeout"
+    assert judged[3].passed and judged[3].attempt_errors == ["timeout"]  # retry succeeded
+    assert "judge errors (counted as fails) 1  judge timeouts (incl. retried) 3" in report(run)
+
+
+def test_crashed_evaluation_keeps_graded_answers_and_resume_finishes_it(env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    with pytest.raises(AssertionError, match="ran out"):  # judge dies on the third answer
+        env.evaluate(FakeLLM([JUDGE_OK, JUDGE_BAD]))
+
+    saved = load(env.path)
+    _, partial = saved.evaluation()
+    assert [(ev.item_id, ev.passed) for ev in partial.answers] == [("hol", True),
+                                                                   ("orion", False)]
+    assert partial.finished_at is None
+    with pytest.raises(ValueError, match="unfinished"):  # no rates over half a run
+        report(saved)
+
+    judge = FakeLLM([JUDGE_OK, JUDGE_OK])
+    run = env.evaluate(judge, resume=True)
+
+    _, evaluation = run.evaluation()
+    assert len(judge.calls) == 2  # graded answers are not judged again
+    assert [(ev.item_id, ev.repeat) for ev in evaluation.answers] == [
+        ("hol", 1), ("orion", 1), ("hol", 2), ("orion", 2)]
+    assert evaluation.answers[:2] == partial.answers
+    assert evaluation.finished_at is not None and load(env.path) == run
+
+
+def test_unfinished_evaluation_is_not_restarted_by_accident(env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    with pytest.raises(AssertionError):
+        env.evaluate(FakeLLM([JUDGE_OK]))
+
+    with pytest.raises(RunError, match="continue it with --resume"):
+        env.evaluate(FakeLLM([JUDGE_OK] * 4))
+
+
+def test_resume_refuses_a_different_judge_model(env: Env):
+    # Mixing grades from two judge models in one evaluation would measure neither.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    with pytest.raises(AssertionError):
+        env.evaluate(FakeLLM([JUDGE_OK]))
+
+    with pytest.raises(RunError, match="no unfinished evaluation"):
+        env.evaluate(FakeLLM([JUDGE_OK] * 3), JUDGE_V1 | {"digest": "sha256:new"}, resume=True)

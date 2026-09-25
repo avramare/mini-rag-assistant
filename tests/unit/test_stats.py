@@ -126,11 +126,13 @@ def test_results_file_with_a_single_evaluation_loads_under_its_judge_version():
     old_format = run.model_dump(mode="json")
     evaluation = old_format.pop("evaluations")["no-judge"]
     evaluation["judge"] = JUDGE
+    del evaluation["finished_at"]  # old files were only ever saved when finished
     old_format["evaluation"] = evaluation
 
     loaded = RunResults.model_validate(old_format)
 
     assert list(loaded.evaluations) == ["abcdef123456"]
+    assert loaded.evaluations["abcdef123456"].finished_at is not None
     assert overall_rate(loaded) == overall_rate(run)
 
 

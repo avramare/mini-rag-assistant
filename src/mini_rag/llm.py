@@ -15,6 +15,11 @@ import httpx
 import numpy as np
 
 
+class LLMTimeoutError(TimeoutError):
+    """The model did not reply in time. Backend-neutral, so callers (the judge) can catch it
+    without knowing about httpx, and FakeLLM can raise it in tests."""
+
+
 @dataclass(frozen=True)
 class Generation:
     """One model reply plus the usage numbers we need for evals. `None` = backend did not say."""
@@ -48,12 +53,16 @@ class OllamaClient:
     """
 
     def __init__(self, host: str, model: str, embed_model: str, num_ctx: int,
-                 timeout: float = 120.0, transport: httpx.BaseTransport | None = None) -> None:
+                 read_timeout: float = 120.0,
+                 transport: httpx.BaseTransport | None = None) -> None:
         self.model = model
         self.embed_model = embed_model
         self.num_ctx = num_ctx
-        # `transport` lets unit tests plug in httpx.MockTransport: real client code, no network.
-        self._http = httpx.Client(base_url=host, timeout=timeout, transport=transport)
+        self.read_timeout = read_timeout
+        # Only the read timeout (waiting for the reply) is long; connecting to a local server is
+        # fast or broken. `transport` lets unit tests plug in httpx.MockTransport: no network.
+        self._http = httpx.Client(base_url=host, timeout=httpx.Timeout(10.0, read=read_timeout),
+                                  transport=transport)
         self._supports_thinking: bool | None = None
 
     def supports_thinking(self) -> bool:
@@ -79,7 +88,11 @@ class OllamaClient:
         }
         if self.supports_thinking():
             body["think"] = False  # thinking tokens cost time and are not part of the contract
-        resp = self._http.post("/api/chat", json=body)
+        try:
+            resp = self._http.post("/api/chat", json=body)
+        except httpx.TimeoutException as exc:
+            raise LLMTimeoutError(
+                f"{self.model} did not reply within {self.read_timeout:g}s") from exc
         resp.raise_for_status()
         data = resp.json()
         total_ns = data.get("total_duration")
@@ -120,10 +133,11 @@ class OllamaClient:
 class FakeLLM:
     """Returns scripted responses in order and records every call. Deterministic, no network.
 
-    A response is a plain string, or a `Generation` when a test needs token counts.
+    A response is a plain string, a `Generation` when a test needs token counts, or an exception
+    to raise (e.g. `LLMTimeoutError`) to simulate a failing backend.
     """
 
-    responses: Iterable[str | Generation]
+    responses: Iterable[str | Generation | Exception]
     model: str = "fake-llm"
     calls: list[tuple[str, str]] = field(default_factory=list)
     schemas: list[dict | None] = field(default_factory=list)
@@ -137,6 +151,8 @@ class FakeLLM:
         if not self._queue:
             raise AssertionError("FakeLLM ran out of scripted responses")
         response = self._queue.popleft()
+        if isinstance(response, Exception):
+            raise response
         return response if isinstance(response, Generation) else Generation(response)
 
 

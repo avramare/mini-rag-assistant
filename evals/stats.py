@@ -26,9 +26,18 @@ class NotComparableError(ValueError):
     pass
 
 
+def finished(run: RunResults, judge: str | None = None) -> tuple[str, Evaluation]:
+    """Rates over an unfinished evaluation would silently cover only some of the answers."""
+    key, evaluation = run.evaluation(judge)
+    if evaluation.finished_at is None:
+        raise ValueError(f"evaluation by judge {key} is unfinished ({len(evaluation.answers)} "
+                         f"of {len(run.answers)} answers); finish it with `evaluate --resume`")
+    return key, evaluation
+
+
 def item_pass_rates(run: RunResults, judge: str | None = None) -> dict[str, float]:
     per_item: dict[str, list[bool]] = defaultdict(list)
-    for ev in run.evaluation(judge)[1].answers:
+    for ev in finished(run, judge)[1].answers:
         per_item[ev.item_id].append(ev.passed)
     return {item: sum(passes) / len(passes) for item, passes in per_item.items()}
 
@@ -58,7 +67,7 @@ def judge_label(key: str, evaluation: Evaluation) -> str:
 
 def report(run: RunResults, judge: str | None = None) -> str:
     c, answers = run.config, run.answers
-    key, evaluation = run.evaluation(judge)
+    key, evaluation = finished(run, judge)
     others = sorted(k for k in run.evaluations if k != key)
     lines = [
         f"Run {c['name']}  dataset {c['dataset']['name']} ({c['dataset']['sha256'][:12]})  "
@@ -80,21 +89,24 @@ def report(run: RunResults, judge: str | None = None) -> str:
 
     applicable, failed = Counter(), Counter()
     diagnostic: set[str] = set()
-    judge_errors = 0
+    judge_errors = judge_timeouts = 0
     for ev in evaluation.answers:
         for r in ev.results:
             if r.applicable:
                 applicable[r.name] += 1
                 failed[r.name] += not r.passed
                 judge_errors += r.detail.startswith("judge_error")
+                judge_timeouts += r.attempt_errors.count("timeout")
                 if not r.gating:
                     diagnostic.add(r.name)
     lines += ["", f"{'evaluator':<20}{'applicable':>11}{'failed':>8}"]
     lines += [f"{name:<20}{applicable[name]:>11}{failed[name]:>8}"
               + ("  diagnostic, not in pass rate" if name in diagnostic else "")
               for name in applicable]
-    if judge_errors:
-        lines.append(f"judge errors (counted as fails): {judge_errors}")
+    if evaluation.judge is not None:
+        # A timeout is retried once; only a second failure becomes a judge_error.
+        lines.append(f"judge errors (counted as fails) {judge_errors}  "
+                     f"judge timeouts (incl. retried) {judge_timeouts}")
 
     refusals = Counter(a.refusal_reason or "-" for a in answers)
     errors = Counter(a.error or "-" for a in answers)
@@ -147,7 +159,7 @@ def check_comparable(a: RunResults, b: RunResults) -> list[str]:
         raise NotComparableError("different dataset items (questions, users or dates)")
     if not a.evaluations or not b.evaluations:
         raise NotComparableError("both runs need an evaluation")
-    (key_a, ev_a), (key_b, ev_b) = a.evaluation(), b.evaluation()
+    (key_a, ev_a), (key_b, ev_b) = finished(a), finished(b)
     if ev_a.dataset_sha256 != ev_b.dataset_sha256:
         raise NotComparableError("graded against different dataset facts; re-evaluate both")
     diffs = [f"{key}: {a.config['assistant'][key]} -> {b.config['assistant'][key]}"

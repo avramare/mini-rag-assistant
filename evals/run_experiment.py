@@ -8,7 +8,7 @@ everything but the judge before pass 2), and so the judge can be re-run without 
 
 Usage:
     uv run python -m evals.run_experiment generate --name <run> --repeats 5 [--dataset P] [--resume]
-    uv run python -m evals.run_experiment evaluate --name <run> [--no-judge]
+    uv run python -m evals.run_experiment evaluate --name <run> [--no-judge] [--resume]
 """
 
 import argparse
@@ -118,7 +118,7 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
 
 
 def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | None,
-             judge_info: dict[str, Any] | None, publisher: Publisher,
+             judge_info: dict[str, Any] | None, publisher: Publisher, *, resume: bool = False,
              log: Log = print) -> RunResults:
     run = load(path)
     expected = run.config["dataset"]["generation_key"]
@@ -132,27 +132,60 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
     if missing:
         raise RunError(f"{missing} answers missing; finish with `generate --resume` first")
 
+    key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
+    evaluation = start_or_resume(run, key, dataset.sha256, judge_info, resume, log)
     items = {i.id: i for i in dataset.items}
-    evaluations = []
+    done = {(ev.item_id, ev.repeat) for ev in evaluation.answers}
     for n, record in enumerate(run.answers, 1):
+        if (record.item_id, record.repeat) in done:
+            continue
         item = items[record.item_id]
         results = run_code_evaluators(item, record, corpus)
         if judge is not None:
             results.append(judge_faithfulness(record, corpus.docs, judge))
-        evaluations.append(AnswerEvaluation(item_id=record.item_id, repeat=record.repeat,
-                                            results=results, passed=answer_passed(results)))
+        evaluation.answers.append(AnswerEvaluation(
+            item_id=record.item_id, repeat=record.repeat, results=results,
+            passed=answer_passed(results)))
+        save(run, path)  # after every answer: a crash loses at most the current one
         if judge is not None:
             log(f"[{n}/{len(run.answers)}] {record.item_id} r{record.repeat} "
-                f"{'pass' if evaluations[-1].passed else 'FAIL'}")
+                f"{'pass' if evaluation.answers[-1].passed else 'FAIL'}")
 
-    key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
-    run.evaluations[key] = Evaluation(evaluated_at=datetime.now(UTC),
-                                      dataset_sha256=dataset.sha256, judge=judge_info,
-                                      answers=evaluations)
+    evaluation.finished_at = datetime.now(UTC)
     save(run, path)  # local results first: a Langfuse outage must not lose the grading
-    for record, ev in zip(run.answers, evaluations, strict=True):
+    # All answers, also those graded before a resume: score ids are deterministic, so a score
+    # that was already sent is overwritten with the same value.
+    by_answer = {(ev.item_id, ev.repeat): ev for ev in evaluation.answers}
+    for record in run.answers:
+        ev = by_answer[(record.item_id, record.repeat)]
         publish_scores(publisher, record, ev.results, ev.passed, key)
     return run
+
+
+def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
+                    judge_info: dict[str, Any] | None, resume: bool, log: Log) -> Evaluation:
+    """Resumable = an unfinished evaluation by the same judge (model digest too) against the same
+    facts; only then can its grades be mixed with new ones. Without --resume a resumable one is
+    not thrown away by accident; one that can no longer be resumed is replaced."""
+    old = run.evaluations.pop(key, None)  # re-inserted below: the one written last is latest
+    unfinished = old is not None and old.finished_at is None
+    resumable = unfinished and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
+    if resume:
+        if not resumable:
+            raise RunError(f"no unfinished evaluation by judge {key} with these facts and this "
+                           "judge model to resume; run evaluate without --resume")
+        log(f"resuming judge {key}: {len(old.answers)} of {len(run.answers)} answers done")
+        run.evaluations[key] = old
+        return old
+    if resumable:
+        raise RunError(f"judge {key} has an unfinished evaluation ({len(old.answers)} of "
+                       f"{len(run.answers)} answers); continue it with --resume")
+    if unfinished:
+        log(f"replacing unfinished evaluation by judge {key}: other facts or judge model")
+    run.evaluations[key] = Evaluation(evaluated_at=datetime.now(UTC), finished_at=None,
+                                      dataset_sha256=dataset_sha256, judge=judge_info,
+                                      answers=[])
+    return run.evaluations[key]
 
 
 def _git_info() -> dict[str, Any]:
@@ -184,6 +217,7 @@ def main() -> int:
     ev = sub.add_parser("evaluate")
     ev.add_argument("--name", required=True)
     ev.add_argument("--no-judge", action="store_true")
+    ev.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     s = Settings()
@@ -198,7 +232,8 @@ def main() -> int:
             dataset = load_dataset(args.dataset, set(users))
             check_facts_in_corpus(dataset, docs)
             check_expected_docs(dataset, docs, users)
-            client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx)
+            client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx,
+                                  read_timeout=s.ollama_read_timeout_s)
             retriever = Retriever(docs, client, cache_dir=s.cache_dir)
             tracer = NoopTracer() if langfuse is None else LangfuseTracer(langfuse)
             assistants: dict[date, Assistant] = {}
@@ -226,7 +261,7 @@ def main() -> int:
             judge = judge_info = None
             if not args.no_judge:
                 judge = OllamaClient(s.ollama_host, s.judge_model, s.embed_model,
-                                     num_ctx=s.num_ctx)
+                                     num_ctx=s.num_ctx, read_timeout=s.ollama_read_timeout_s)
                 for model in judge.loaded_models():
                     if model not in {s.judge_model, f"{s.judge_model}:latest"}:
                         judge.unload(model)  # only the judge stays in memory
@@ -235,7 +270,7 @@ def main() -> int:
                               "digest": judge.model_digests([s.judge_model])[s.judge_model],
                               "prompt_sha256": JUDGE_PROMPT_SHA256, "pass_score": PASS_SCORE}
             evaluate(path, dataset, Corpus({d.id: d for d in docs}, users), judge, judge_info,
-                     publisher)
+                     publisher, resume=args.resume)
             print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")
     except (RunError, DatasetError) as exc:
         print(f"[fail] {exc}")

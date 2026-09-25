@@ -37,7 +37,7 @@ def settings() -> Settings:
 @pytest.fixture(scope="module")
 def judge(settings: Settings) -> OllamaClient:
     return OllamaClient(settings.ollama_host, settings.judge_model, settings.embed_model,
-                        num_ctx=settings.num_ctx)
+                        num_ctx=settings.num_ctx, read_timeout=settings.ollama_read_timeout_s)
 
 
 @pytest.fixture(scope="module")

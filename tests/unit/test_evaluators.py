@@ -18,7 +18,7 @@ from evals.judge import judge_faithfulness
 from evals.results import AnswerRecord, EvalResult, RetrievedDoc
 from mini_rag.assistant import Answer
 from mini_rag.documents import Access, load_documents
-from mini_rag.llm import FakeLLM
+from mini_rag.llm import FakeLLM, LLMTimeoutError
 from mini_rag.users import User
 
 
@@ -194,6 +194,25 @@ def test_judge_invalid_twice_is_counted_as_failed_judge_error(corpus):
 
     assert result.applicable and result.passed is False
     assert result.detail.startswith("judge_error")
+
+
+def test_judge_timeout_is_retried_once_and_recorded_when_the_retry_succeeds(corpus):
+    llm = FakeLLM([LLMTimeoutError("slow"), judge_reply(5)])
+
+    result = judge_faithfulness(record(), corpus.docs, llm)
+
+    assert (result.passed, result.value, result.attempt_errors) == (True, 5, ["timeout"])
+    assert llm.calls[1] == llm.calls[0]  # a timeout is not an invalid reply: no "not valid" note
+
+
+def test_judge_timeout_twice_is_a_counted_judge_error_not_a_crash(corpus):
+    llm = FakeLLM([LLMTimeoutError("slow"), LLMTimeoutError("slow"), judge_reply(5)])
+
+    result = judge_faithfulness(record(), corpus.docs, llm)
+
+    assert result.applicable and result.passed is False
+    assert result.detail == "judge_error: timeout, timeout"
+    assert len(llm.calls) == 2  # exactly one retry
 
 
 def test_judge_skips_refusals_without_calling_the_model(corpus):

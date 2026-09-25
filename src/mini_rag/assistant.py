@@ -209,7 +209,8 @@ def main() -> None:
     args = parser.parse_args()
 
     s = Settings()
-    client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx)
+    client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx,
+                          read_timeout=s.ollama_read_timeout_s)
     t0 = time.perf_counter()
     retriever = Retriever(load_documents(s.docs_dir), client, cache_dir=s.cache_dir)
     t1 = time.perf_counter()

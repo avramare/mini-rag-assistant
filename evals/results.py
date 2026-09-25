@@ -75,6 +75,9 @@ class EvalResult(BaseModel):
     # restricted items are restricted); they refer to facts by position ("#2"). The judge's reason
     # can quote the answer, so publish_scores masks it like the trace.
     detail: str = ""
+    # Failed attempts before this result ("timeout", "invalid_output"); the report counts them
+    # even when the retry succeeded.
+    attempt_errors: list[str] = []
 
 
 class AnswerEvaluation(BaseModel):
@@ -85,10 +88,21 @@ class AnswerEvaluation(BaseModel):
 
 
 class Evaluation(BaseModel):
-    evaluated_at: datetime
+    evaluated_at: datetime  # when it started
+    # None while unfinished: saved after every answer, continued with `evaluate --resume`.
+    # No default, so new code must set it; only old files get it filled in below.
+    finished_at: datetime | None
     dataset_sha256: str  # the facts used for grading; compare refuses different values
     judge: dict[str, Any] | None  # model, digest, prompt sha256; None with --no-judge
     answers: list[AnswerEvaluation]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _saved_whole(cls, data: Any) -> Any:
+        """Files written before incremental saves only ever held finished evaluations."""
+        if isinstance(data, dict) and "finished_at" not in data:
+            data = {**data, "finished_at": data.get("evaluated_at")}
+        return data
 
 
 NO_JUDGE = "no-judge"
@@ -103,7 +117,9 @@ def evaluation_key(judge: dict[str, Any] | None) -> str:
 class RunResults(BaseModel):
     config: dict[str, Any]
     answers: list[AnswerRecord] = []
-    evaluations: dict[str, Evaluation] = {}  # evaluation_key -> evaluation
+    # evaluation_key -> evaluation, oldest first: the runner moves the one it writes to the end.
+    # Order, not `evaluated_at`: two evaluations can share a timestamp (Windows clock ticks ~15 ms).
+    evaluations: dict[str, Evaluation] = {}
 
     @model_validator(mode="before")
     @classmethod
@@ -125,7 +141,8 @@ class RunResults(BaseModel):
         if not self.evaluations:
             raise ValueError("run has no evaluation yet; run `evaluate` first")
         if key is None:
-            return max(self.evaluations.items(), key=lambda kv: kv[1].evaluated_at)
+            latest = next(reversed(self.evaluations))
+            return latest, self.evaluations[latest]
         matches = [k for k in self.evaluations if k.startswith(key)]
         if len(matches) != 1:
             raise ValueError(f"judge version {key!r} matches {matches or 'nothing'}; "

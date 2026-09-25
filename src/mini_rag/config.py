@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     embed_model: str = ""
     judge_model: str = ""
     num_ctx: int = 4096
+    ollama_read_timeout_s: float = 120.0
     max_prompt_ctx_share: float = 0.75
 
     langfuse_public_key: SecretStr = SecretStr("")

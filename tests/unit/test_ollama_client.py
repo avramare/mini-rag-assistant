@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from mini_rag.assistant import ANSWER_SCHEMA
-from mini_rag.llm import OllamaClient
+from mini_rag.llm import LLMTimeoutError, OllamaClient
 
 CHAT_REPLY = {
     "message": {"role": "assistant",
@@ -130,3 +130,19 @@ def test_unload_asks_ollama_to_drop_the_model_now():
     client.unload("qwen3:4b")
 
     assert sent == [{"path": "/api/generate", "model": "qwen3:4b", "keep_alive": 0}]
+
+
+def test_read_timeout_is_configurable_and_surfaces_as_llm_timeout():
+    # The judge retries only LLMTimeoutError; an httpx exception leaking through would abort the
+    # whole evaluate pass instead of becoming one counted judge_error.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": []})
+        raise httpx.ReadTimeout("slow", request=request)
+
+    client = OllamaClient("http://ollama", "qwen3:4b", "e", num_ctx=4096, read_timeout=45,
+                          transport=httpx.MockTransport(handler))
+
+    with pytest.raises(LLMTimeoutError, match="within 45s"):
+        client.generate("sys", "prompt")
+    assert client._http.timeout.read == 45  # the value reaches httpx, not only the message
