@@ -11,6 +11,11 @@ Plan: `_planning/plans/2026-09-25-phase-3-evals.md`. Smoke run `20260925-smoke-d
   give the judge the as_of date and the version rule. Re-judge only needs `evaluate`.
 - Smoke-run model failures: two-part questions answered only in part (fact-01, fact-05, restr-03b); ver-04 returned
   an empty answer with no citations (became an `uncited` refusal).
+- Contract change to measure AFTER Phase 4, do not change now: ver-04's empty answer with no citations is turned
+  into an `uncited` refusal (DECISIONS #4), so it is graded as a wrong refusal, not as an invalid output. Decide
+  whether an empty `answer` on a non-refused reply should be a contract violation (`invalid_output`, counted and
+  retried once) instead. Measure how often it happens with repeats first; changing it now would move the numbers
+  Phase 4 is supposed to baseline.
 - Finding: lead asking "What is the approved budget for Project Orion?" answered 5 million
   (orion-budget-v2, effective 2027-01-01) instead of the in-force 4.2 million in both real runs so far
   (2026-09-24, 2026-09-25; n=2). The model ignores the "not after today" rule. Measure with repeats in
