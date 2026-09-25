@@ -137,6 +137,19 @@ def test_judge_sees_retrieved_doc_text_and_answer(corpus):
     assert "ANSWER: 27 days." in prompt
 
 
+def test_judge_sees_as_of_and_effective_dates_to_tell_versions_apart(corpus):
+    # Without both dates the judge cannot know which version is in force and fails correct
+    # answers as "conflicting" (smoke run ver-02/ver-03, DECISIONS #28).
+    llm = FakeLLM([judge_reply(5)])
+
+    judge_faithfulness(record("27 days."), corpus.docs, llm)
+
+    system, prompt = llm.calls[0][0], llm.calls[0][1]
+    assert "AS OF: 2026-07-15" in prompt
+    assert "[doc id: holiday-policy] Holiday policy (effective 2026-06-01)" in prompt
+    assert "latest version in force on the AS OF date" in " ".join(system.split())
+
+
 def test_judge_invalid_twice_is_counted_as_failed_judge_error(corpus):
     result = judge_faithfulness(record(), corpus.docs, FakeLLM(["nope", '{"score": 9}']))
 

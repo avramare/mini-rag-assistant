@@ -86,14 +86,14 @@ class AnswerResult:
         return self.error is None
 
 
-def _doc_header(doc: Document) -> str:
+def doc_header(doc: Document) -> str:
     effective = f" (effective {doc.effective.isoformat()})" if doc.effective else ""
     return f"[doc id: {doc.id}] {doc.title}{effective}"
 
 
 def build_prompt(question: str, hits: list[Hit], today: date) -> str:
     if hits:
-        context = "\n\n".join(f"{_doc_header(h.doc)}\n{h.doc.body}" for h in hits)
+        context = "\n\n".join(f"{doc_header(h.doc)}\n{h.doc.body}" for h in hits)
     else:
         context = "(no documents available)"
     return f"Today is {today.isoformat()}.\n\nContext:\n{context}\n\nQuestion: {question}"
@@ -109,7 +109,7 @@ def parse_answer(raw: str) -> Answer | None:
 def estimate_worst_case_prompt_tokens(docs: list[Document], k: int, today: date) -> int:
     """Pessimistic token estimate for the largest prompt we can send: the k longest docs
     (ignoring access, so it covers every user), a long question, and the retry note."""
-    longest = sorted(docs, key=lambda d: len(_doc_header(d)) + len(d.body), reverse=True)[:k]
+    longest = sorted(docs, key=lambda d: len(doc_header(d)) + len(d.body), reverse=True)[:k]
     prompt = build_prompt("x" * QUESTION_ALLOWANCE_CHARS, [Hit(d, 0.0) for d in longest], today)
     return math.ceil(len(SYSTEM_PROMPT + prompt + RETRY_NOTE) / CHARS_PER_TOKEN)
 
