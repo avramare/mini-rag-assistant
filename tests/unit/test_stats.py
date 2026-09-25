@@ -164,3 +164,15 @@ def test_compare_names_the_config_change_and_per_category_delta():
 
     assert "k: 3 -> 5" in text
     assert ["versioning", "2", "50.0%", "100.0%", "+50.0"] in rows(text)
+
+
+def test_report_header_shows_generation_and_evaluation_dataset_hashes():
+    # After a facts edit the run is re-graded against other facts than it was generated with;
+    # showing only the generation hash hid which facts the numbers came from.
+    run = make_run(PASSES, CATEGORIES)
+    assert "generated with dddddddddddd  evaluated with dddddddddddd\n" in report(run)
+
+    run.evaluation()[1].dataset_sha256 = "e" * 64
+
+    assert ("generated with dddddddddddd  evaluated with eeeeeeeeeeee  "
+            "(grading fields changed after generation)") in report(run)

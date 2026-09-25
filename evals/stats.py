@@ -69,9 +69,13 @@ def report(run: RunResults, judge: str | None = None) -> str:
     c, answers = run.config, run.answers
     key, evaluation = finished(run, judge)
     others = sorted(k for k in run.evaluations if k != key)
+    generated, evaluated = c["dataset"]["sha256"][:12], evaluation.dataset_sha256[:12]
     lines = [
-        f"Run {c['name']}  dataset {c['dataset']['name']} ({c['dataset']['sha256'][:12]})  "
-        f"as_of {c['as_of']}  repeats {c['repeats']}",
+        f"Run {c['name']}  as_of {c['as_of']}  repeats {c['repeats']}",
+        # Two hashes: editing facts or expected docs after generation re-grades the saved
+        # answers (DECISIONS #22), so they can be graded against another file than generated from.
+        f"dataset {c['dataset']['name']}  generated with {generated}  evaluated with {evaluated}"
+        + ("" if generated == evaluated else "  (grading fields changed after generation)"),
         f"gen {c['assistant']['gen_model']}  embed {c['assistant']['embed_model']}  "
         f"k {c['assistant']['k']}  num_ctx {c['assistant']['num_ctx']}  "
         f"prompt {c['assistant']['system_prompt_sha256'][:12]}",
