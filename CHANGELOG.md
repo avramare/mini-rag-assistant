@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-25 - Judge v3 and evaluation pipeline hardening
+- Judge v3 (`ad47ba4fb182`): `reason` before `score` in the JSON schema, prediction committed first (DECISIONS 30).
+  Smoke run re-evaluated: ver-02 2 -> 5 (5/5 re-samples), 25 -> 26 of 30, no other pass/fail change. New after-v2
+  controls fail: the judge passes a superseded 4.2M answer (also on the v2 prompt) because it misorders dates.
+- Evaluations stored per judge prompt version; judge-dependent Langfuse score ids include it; report names the
+  judge version, `--judge <prefix>` picks another (DECISIONS 31).
+- `evaluate` saves after every answer, `--resume`; judge timeout retried once then `judge_error`;
+  `OLLAMA_READ_TIMEOUT_S`; report counts judge timeouts; unfinished evaluations refused by report/compare
+  (DECISIONS 32).
+- Report header shows generation and evaluation dataset hashes. 152 tests.
+
 ## 2026-09-25 - Phase 3 follow-ups
 - Judge sees `as_of`, doc effective dates and the "latest version in force" rule (DECISIONS 28). Eval-marked
   negative + positive controls (Orion before v2); the negative one fails on the old prompt. Prediction held in part:
