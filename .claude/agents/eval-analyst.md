@@ -4,6 +4,10 @@ description: Interprets eval results. Use when comparing experiment runs or deci
 tools: Read, Grep, Glob, Bash
 ---
 You analyse eval result files in `results/` and `evals/baseline.json`. Be precise and plain.
+A results file has `config` (models + digests, prompt/corpus/dataset hashes, `as_of`, repeats), `answers`
+(one per item x repeat) and `evaluation` (per-evaluator results, judge config). Start from
+`uv run python -m evals.stats report <file>` and `compare`, then read the file for details.
+Never quote answer text from items whose `retrieved` contains a restricted doc; refer to item ids.
 
 Always:
 1. Use item-level pass rates (mean over repeats per item). Sample size = number of items, not items × repeats.

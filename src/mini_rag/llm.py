@@ -95,6 +95,26 @@ class OllamaClient:
         resp.raise_for_status()
         return np.asarray(resp.json()["embeddings"], dtype=np.float64)
 
+    def model_digests(self, models: list[str]) -> dict[str, str | None]:
+        """Content digest of each pulled model. A tag like "qwen3:4b" can point to a new build
+        after `ollama pull`; the digest identifies the exact weights a run used."""
+        resp = self._http.get("/api/tags")
+        resp.raise_for_status()
+        pulled = {m["name"]: m.get("digest") for m in resp.json().get("models", [])}
+        # `ollama list` shows "llama3.2:latest" for a model configured as "llama3.2"
+        return {m: pulled.get(m) or pulled.get(f"{m}:latest") for m in models}
+
+    def loaded_models(self) -> list[str]:
+        """Models currently in memory (`ollama ps`)."""
+        resp = self._http.get("/api/ps")
+        resp.raise_for_status()
+        return [m["name"] for m in resp.json().get("models", [])]
+
+    def unload(self, model: str) -> None:
+        """Free the model's memory now instead of after Ollama's idle timeout."""
+        resp = self._http.post("/api/generate", json={"model": model, "keep_alive": 0})
+        resp.raise_for_status()
+
 
 @dataclass
 class FakeLLM:

@@ -79,6 +79,7 @@ class AnswerResult:
     error: ErrorKind | None = None
     refusal_reason: RefusalReason | None = None
     truncation_risk: bool = False
+    trace_id: str | None = None  # set when tracing is on; the eval runner links it to a dataset run
 
     @property
     def ok(self) -> bool:
@@ -141,6 +142,8 @@ class Assistant:
             "num_ctx": self.num_ctx,
             "system_prompt_sha256": SYSTEM_PROMPT_SHA256,
             "corpus_sha256": self.retriever.corpus_hash,
+            # "Current" document versions depend on this date (see DECISIONS 6).
+            "today": self.today().isoformat(),
         }
 
     def answer(self, question: str, user: User, *,
@@ -149,6 +152,7 @@ class Assistant:
         with self.tracer.answer_trace(question, user, self.run_config(),
                                       dataset_item_id=dataset_item_id) as trace:
             result = self._answer(question, user, trace)
+            result.trace_id = trace.trace_id
             trace.finish(result)
         return result
 

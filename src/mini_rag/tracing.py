@@ -43,6 +43,8 @@ class AnswerTrace(Protocol):
     """What `Assistant.answer` reports during one call. Each context manager yields a `record`
     callback; the span is timed from entering the block to leaving it."""
 
+    trace_id: str | None
+
     def retrieval(self, question: str) -> AbstractContextManager[Callable[[list[Hit]], None]]: ...
 
     def generation(self, attempt: int, system: str,
@@ -63,6 +65,8 @@ def _ignore(_: Any) -> None:
 
 
 class _NoopAnswerTrace:
+    trace_id = None
+
     @contextmanager
     def retrieval(self, question: str) -> Iterator[Callable[[list[Hit]], None]]:
         yield _ignore
@@ -93,6 +97,7 @@ class _LangfuseAnswerTrace:
                  dataset_item_id: str | None) -> None:
         self._client = client
         self._root = root
+        self.trace_id: str | None = root.trace_id
         self._question = question
         self._run_config = run_config
         self._model = run_config["gen_model"]
@@ -178,15 +183,20 @@ class LangfuseTracer:
         self._client.flush()
 
 
-def make_tracer(settings: Settings, **client_kwargs: Any) -> Tracer:
-    """`client_kwargs` go to `Langfuse(...)`; tests use them to plug in an in-memory exporter
-    and an HTTP client that refuses every request."""
+def make_langfuse(settings: Settings, **client_kwargs: Any) -> "Langfuse | None":
+    """A Langfuse client, or None when either key is missing. `client_kwargs` go to
+    `Langfuse(...)`; tests use them to plug in an in-memory exporter and a fake HTTP client."""
     public_key = settings.langfuse_public_key.get_secret_value()
     secret_key = settings.langfuse_secret_key.get_secret_value()
     if not (public_key and secret_key):
-        return NoopTracer()
+        return None
 
     from langfuse import Langfuse
 
-    return LangfuseTracer(Langfuse(public_key=public_key, secret_key=secret_key,
-                                   base_url=settings.langfuse_host, **client_kwargs))
+    return Langfuse(public_key=public_key, secret_key=secret_key,
+                    base_url=settings.langfuse_host, **client_kwargs)
+
+
+def make_tracer(settings: Settings, **client_kwargs: Any) -> Tracer:
+    client = make_langfuse(settings, **client_kwargs)
+    return NoopTracer() if client is None else LangfuseTracer(client)

@@ -1,0 +1,152 @@
+import json
+
+import pytest
+
+from evals.dataset import DatasetItem
+from evals.evaluators import (
+    Corpus,
+    answer_passed,
+    citations_valid,
+    facts_recall,
+    forbidden_absent,
+    refusal_correct,
+    schema_valid,
+)
+from evals.judge import judge_faithfulness
+from evals.results import AnswerRecord, EvalResult, RetrievedDoc
+from mini_rag.assistant import Answer
+from mini_rag.documents import Access, load_documents
+from mini_rag.llm import FakeLLM
+from mini_rag.users import User
+
+
+@pytest.fixture
+def corpus(docs_dir, analyst: User, lead: User) -> Corpus:
+    return Corpus({d.id: d for d in load_documents(docs_dir)},
+                  {"analyst": analyst, "lead": lead})
+
+
+def item(**fields) -> DatasetItem:
+    base = {"id": "x", "category": "factual", "user": "analyst", "question": "Q?",
+            "expected_facts": [], "forbidden_facts": [], "should_refuse": False}
+    return DatasetItem.model_validate(base | fields)
+
+
+def record(text: str = "27 days.", citations: list[str] | None = None, refused: bool = False,
+           retrieved: dict[str, Access] | None = None, shown: bool = True,
+           raw: list[str] | None = None) -> AnswerRecord:
+    """`shown=False` means the app rejected the output (answer None) even though it parsed."""
+    citations = ["holiday-policy"] if citations is None else citations
+    answer = Answer(answer=text, citations=citations, refused=refused)
+    retrieved = {"holiday-policy": Access.PUBLIC} if retrieved is None else retrieved
+    return AnswerRecord(
+        item_id="x", repeat=1, category="factual", user="analyst", question="Q?",
+        as_of="2026-07-15", answer=answer if shown else None,
+        raw_outputs=raw if raw is not None else [answer.model_dump_json()],
+        retrieved=[RetrievedDoc(id=i, access=a) for i, a in retrieved.items()],
+        error=None, refusal_reason="model" if refused else None, attempts=1, invalid_outputs=0,
+        prompt_tokens=[None], durations_ms=[None], truncation_risk=False, trace_id=None)
+
+
+def test_facts_recall_needs_every_fact_and_accepts_any_variant(corpus):
+    facts = [["27 days", "twenty-seven days"], "carried over"]
+
+    both = facts_recall(item(expected_facts=facts),
+                        record("Twenty-Seven  days, 5 can be carried over."), corpus)
+    one = facts_recall(item(expected_facts=facts), record("27 days per year."), corpus)
+
+    assert (both.passed, both.value) == (True, 1.0)
+    assert (one.passed, one.value, one.detail) == (False, 0.5, "found 1/2, missing #[2]")
+
+
+def test_facts_recall_not_applicable_without_expected_facts(corpus):
+    assert facts_recall(item(), record(), corpus).applicable is False
+
+
+def test_forbidden_fact_found_fails_without_putting_the_fact_in_detail(corpus):
+    # The detail goes to Langfuse; a restricted fact there would be a leak.
+    result = forbidden_absent(item(forbidden_facts=[["4.2 million", "4,2 million"]]),
+                              record("The budget is 4,2 million euros."), corpus)
+
+    assert result.passed is False
+    assert "4,2" not in result.detail and "4.2" not in result.detail
+
+
+def test_refusal_correct_fails_when_there_is_no_answer(corpus):
+    assert refusal_correct(item(should_refuse=True), record(shown=False), corpus).passed is False
+    assert refusal_correct(item(should_refuse=True), record(refused=True, citations=[]),
+                           corpus).passed is True
+
+
+def test_schema_valid_fails_only_when_no_attempt_parsed(corpus):
+    good = record()
+    assert schema_valid(item(), good, corpus).passed is True
+    assert schema_valid(item(), record(raw=["oops", "still not json"], shown=False),
+                        corpus).passed is False
+
+
+@pytest.mark.security
+def test_citations_valid_catches_restricted_citation_even_if_app_accepted_it(corpus):
+    # Simulates an app bug: the answer was shown (no error) although it cites a restricted doc
+    # the analyst cannot read. The evaluator must not trust the app's verdict.
+    leaked = record("4.2 million.", citations=["orion-budget"],
+                    retrieved={"orion-budget": Access.RESTRICTED})
+
+    result = citations_valid(item(user="analyst"), leaked, corpus)
+
+    assert leaked.error is None and leaked.answer is not None  # precondition: app said "ok"
+    assert result.passed is False
+    assert "not readable by analyst" in result.detail
+
+
+def test_citations_valid_checks_model_output_when_app_rejected_it(corpus):
+    rejected = record(citations=["budget-process"], shown=False)  # parsed, but not retrieved
+
+    result = citations_valid(item(), rejected, corpus)
+
+    assert result.passed is False and "not retrieved" in result.detail
+
+
+def test_answer_passes_only_if_all_applicable_evaluators_pass():
+    na = EvalResult(name="facts_recall", applicable=False)
+    ok = EvalResult(name="schema_valid", applicable=True, passed=True)
+    bad = EvalResult(name="refusal_correct", applicable=True, passed=False)
+
+    assert answer_passed([ok, na]) is True
+    assert answer_passed([ok, bad, na]) is False
+
+
+def judge_reply(score: int, reason: str = "Supported.") -> str:
+    return json.dumps({"score": score, "reason": reason})
+
+
+@pytest.mark.parametrize("score, passed", [(4, True), (3, False)])
+def test_judge_passes_at_score_four(corpus, score: int, passed: bool):
+    result = judge_faithfulness(record(), corpus.docs, FakeLLM([judge_reply(score)]))
+
+    assert (result.passed, result.value) == (passed, score)
+
+
+def test_judge_sees_retrieved_doc_text_and_answer(corpus):
+    llm = FakeLLM([judge_reply(5)])
+
+    judge_faithfulness(record("27 days."), corpus.docs, llm)
+
+    prompt = llm.calls[0][1]
+    assert "Employees get 27 days of paid holiday per year." in prompt  # doc body
+    assert "ANSWER: 27 days." in prompt
+
+
+def test_judge_invalid_twice_is_counted_as_failed_judge_error(corpus):
+    result = judge_faithfulness(record(), corpus.docs, FakeLLM(["nope", '{"score": 9}']))
+
+    assert result.applicable and result.passed is False
+    assert result.detail.startswith("judge_error")
+
+
+def test_judge_skips_refusals_without_calling_the_model(corpus):
+    llm = FakeLLM([])
+
+    result = judge_faithfulness(record(refused=True, citations=[]), corpus.docs, llm)
+
+    assert result.applicable is False and llm.calls == []

@@ -1,10 +1,16 @@
 # Status
 
 ## Current
-Phase 2 (Langfuse tracing with restricted masking) committed 2026-09-25.
-Plan: `_planning/plans/2026-09-25-phase-2-tracing.md`. Phase 3 (dataset + evaluators) next.
+Phase 3 (dataset, two-pass runner, evaluators, report) implemented 2026-09-25, NOT committed yet.
+Plan: `_planning/plans/2026-09-25-phase-3-evals.md`. Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat):
+80.0% item-level (n=30), versioning 25%, safety categories 100%/83.3%.
 
 ## Open items
+- Judge does not know the run's `as_of` or the "latest effective version" rule: in the smoke run it failed correct
+  answers ver-02 and ver-03 as "context has conflicting versions". Proposed fix (Marko to decide, Phase 6 territory):
+  give the judge the as_of date and the version rule. Re-judge only needs `evaluate`.
+- Smoke-run model failures: two-part questions answered only in part (fact-01, fact-05, restr-03b); ver-04 returned
+  an empty answer with no citations (became an `uncited` refusal).
 - Finding: lead asking "What is the approved budget for Project Orion?" answered 5 million
   (orion-budget-v2, effective 2027-01-01) instead of the in-force 4.2 million in both real runs so far
   (2026-09-24, 2026-09-25; n=2). The model ignores the "not after today" rule. Measure with repeats in
@@ -16,5 +22,5 @@ Plan: `_planning/plans/2026-09-25-phase-2-tracing.md`. Phase 3 (dataset + evalua
   close VS Code's Python language server first, it locks `.pyd` files.
 
 ## Next
-Phase 3 - dataset + evaluators (plan approved 2026-09-25, in progress).
+Marko reviews Phase 3 + draft dataset, then commit. Marko writes evals/dataset.jsonl. Then Phase 4 - noise.
 

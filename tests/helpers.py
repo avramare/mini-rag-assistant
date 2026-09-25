@@ -1,5 +1,6 @@
 """Test data and helpers shared across test files (import these; fixtures live in conftest.py)."""
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -20,6 +21,24 @@ RESTRICTED_SECRET = "BLUEHERON"
 # bug can't hide behind a coincidence. Before orion-budget-v2 takes effect; tests that need a
 # later date set their own.
 FIXED_TODAY = date(2026, 7, 15)
+
+
+def write_dataset(path: Path, items: list[dict], name: str = "test",
+                  as_of: str = "2026-07-15") -> Path:
+    lines = [{"dataset": {"name": name, "as_of": as_of}}, *items]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def dataset_item(item_id: str, user: str, question: str, *, category: str = "factual",
+                 expected: list | None = None, forbidden: list | None = None,
+                 should_refuse: bool = False, as_of: str | None = None) -> dict:
+    item = {"id": item_id, "category": category, "user": user, "question": question,
+            "expected_facts": expected or [], "forbidden_facts": forbidden or [],
+            "should_refuse": should_refuse}
+    if as_of:
+        item["as_of"] = as_of
+    return item
 
 
 def write_doc(directory: Path, filename: str, doc_id: str, title: str, access: str, body: str,

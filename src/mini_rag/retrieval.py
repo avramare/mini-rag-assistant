@@ -36,16 +36,25 @@ def index_key(texts: list[str], embed_model: str) -> str:
     return hashlib.sha256(json.dumps([embed_model, texts]).encode()).hexdigest()
 
 
+def _doc_texts(docs: list[Document]) -> list[str]:
+    return [f"{d.title}\n{d.body}" for d in docs]
+
+
+def corpus_hash(docs: list[Document], embed_model: str) -> str:
+    """Identifies the exact corpus + embedding model; equal to the index cache key. Computable
+    without embedding anything, so the eval judge can check it matches the run's corpus."""
+    return index_key(_doc_texts(docs), embed_model)
+
+
 class Retriever:
     def __init__(self, docs: list[Document], embedder: Embedder,
                  cache_dir: Path | None = None) -> None:
         self._docs = list(docs)
         self._embedder = embedder
         self.embed_model = embedder.embed_model
-        texts = [f"{d.title}\n{d.body}" for d in self._docs]
-        # Same value as the index cache key: identifies the exact corpus + embedding model.
+        texts = _doc_texts(self._docs)
         # Recorded with every trace and eval run so runs over different corpora are never mixed.
-        self.corpus_hash = index_key(texts, self.embed_model)
+        self.corpus_hash = corpus_hash(self._docs, self.embed_model)
         self._matrix = (_normalize(self._embed_docs(texts, cache_dir)) if texts
                         else np.zeros((0, 0)))
 

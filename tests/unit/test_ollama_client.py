@@ -104,3 +104,29 @@ def test_missing_usage_numbers_become_none_not_zero():
     gen = make_client(server).generate("sys", "prompt", ANSWER_SCHEMA)
 
     assert (gen.prompt_tokens, gen.completion_tokens, gen.duration_ms) == (None, None, None)
+
+
+def test_model_digest_found_for_tag_listed_with_latest_suffix():
+    # `ollama list` shows "nomic-embed-text:latest" for a model configured as "nomic-embed-text";
+    # a missed lookup would record None and lose which weights the run used.
+    tags = {"models": [{"name": "qwen3:4b", "digest": "aaa"},
+                       {"name": "nomic-embed-text:latest", "digest": "bbb"}]}
+    client = OllamaClient("http://ollama", "qwen3:4b", "nomic-embed-text", num_ctx=4096,
+                          transport=httpx.MockTransport(lambda r: httpx.Response(200, json=tags)))
+
+    assert client.model_digests(["qwen3:4b", "nomic-embed-text", "missing"]) == {
+        "qwen3:4b": "aaa", "nomic-embed-text": "bbb", "missing": None}
+
+
+def test_unload_asks_ollama_to_drop_the_model_now():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append({"path": request.url.path, **json.loads(request.content)})
+        return httpx.Response(200, json={})
+
+    client = OllamaClient("http://ollama", "qwen3:4b", "e", num_ctx=4096,
+                          transport=httpx.MockTransport(handler))
+    client.unload("qwen3:4b")
+
+    assert sent == [{"path": "/api/generate", "model": "qwen3:4b", "keep_alive": 0}]

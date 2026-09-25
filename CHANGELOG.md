@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-25 - Phase 3: dataset, two-pass runner, evaluators
+- `evals/dataset.py`: JSONL with header (`name`, fixed `as_of`, per-item override); facts as string or list of
+  variants; validation (category enum incl. `versioning`, users, refusal/facts, answer-in-question, duplicates);
+  canonical fact variant must appear verbatim in the corpus. `generation_key` vs file `sha256`.
+- `evals/dataset.draft.jsonl`: 30 generated items (DECISIONS 27); example file gets header + versioning placeholder.
+- `run_experiment generate|evaluate`: pass 1 saves answers atomically after each one (`--resume`), links masked
+  traces to one Langfuse dataset run per repeat, unloads the gen model; pass 2 runs code evaluators + LLM judge on
+  saved answers (re-runnable), refuses changed questions/corpus, pushes scores with deterministic ids.
+- Evaluators: schema_valid, refusal_correct, facts_recall (1.0), forbidden_absent, citations_valid (independent of
+  app flags), judge_faithfulness (1-5, pass >= 4, one retry, judge_error counted).
+- `stats report` (item-level rates overall + per category, evaluator fails, refusal reasons, errors, retries,
+  truncation, p50/p95 duration, failing items); `stats compare` refuses different `as_of` or facts.
+- Run config: `today`, Ollama model digests, git commit; `AnswerResult.trace_id`; OllamaClient `model_digests`,
+  `loaded_models`, `unload`.
+- Security: dataset upload sends no facts; judge reasons masked for restricted context (real client, captured HTTP).
+- Phase 2 review findings closed (separate commit). 8 Phase 3 mutations killed. 129 tests, ~3 s.
+
 ## 2026-09-25 - Phase 2: tracing
 - `tracing.py`: one Langfuse trace per `answer()` (root `answer` span, `retrieval` retriever span, one
   `generation` per attempt with model and token usage). `NoopTracer` unless both Langfuse keys are set.
