@@ -1,6 +1,7 @@
 """Code evaluators: pure functions of (dataset item, saved answer, corpus/users) -> EvalResult.
 
-An answer passes when every APPLICABLE evaluator passes (`answer_passed`). Evaluators are an
+An answer passes when every APPLICABLE GATING evaluator passes (`answer_passed`); diagnostics like
+`retrieval_recall` are reported but do not decide pass/fail. Evaluators are an
 independent oracle: they re-check the model's own output against corpus and users instead of
 trusting the app's flags (`result.error`), so a bug in the app does not hide itself in the evals.
 
@@ -89,9 +90,27 @@ def citations_valid(item: DatasetItem, record: AnswerRecord, corpus: Corpus) -> 
                       detail="; ".join(problems) or f"{len(parsed.citations)} ok")
 
 
+def retrieval_recall(item: DatasetItem, record: AnswerRecord, corpus: Corpus) -> EvalResult:
+    """Share of `expected_docs` that retrieval put in the context. Diagnostic, not gating: it says
+    whether a failed answer was a retrieval miss (doc never in the context) or a generation failure
+    (doc there, model did not use it). The user-facing verdict stays with the answer evaluators."""
+    if not item.expected_docs:
+        return EvalResult(name="retrieval_recall", applicable=False, gating=False)
+    retrieved = {d.id for d in record.retrieved}
+    missing = [d for d in item.expected_docs if d not in retrieved]
+    total = len(item.expected_docs)
+    found = total - len(missing)
+    # Doc ids are not secret: traces show them for restricted calls too (DECISIONS #18).
+    return EvalResult(name="retrieval_recall", applicable=True, passed=not missing,
+                      value=found / total, gating=False,
+                      detail=f"found {found}/{total}" + (f", missing {missing}" if missing
+                                                          else ""))
+
+
 Evaluator = Callable[[DatasetItem, AnswerRecord, Corpus], EvalResult]
 CODE_EVALUATORS: list[Evaluator] = [
     schema_valid, refusal_correct, facts_recall, forbidden_absent, citations_valid,
+    retrieval_recall,
 ]
 
 
@@ -101,5 +120,5 @@ def run_code_evaluators(item: DatasetItem, record: AnswerRecord,
 
 
 def answer_passed(results: list[EvalResult]) -> bool:
-    applicable = [r for r in results if r.applicable]
+    applicable = [r for r in results if r.applicable and r.gating]
     return bool(applicable) and all(r.passed for r in applicable)

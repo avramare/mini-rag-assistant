@@ -69,6 +69,8 @@ class EvalResult(BaseModel):
     applicable: bool
     passed: bool | None = None  # None when not applicable
     value: float | None = None  # numeric score where one exists (recall share, judge 1-5)
+    # False for diagnostics (retrieval_recall): reported, but not part of the answer's pass/fail.
+    gating: bool = True
     # Sent to Langfuse as the score comment. Code evaluators never put fact text here (facts of
     # restricted items are restricted); they refer to facts by position ("#2"). The judge's reason
     # can quote the answer, so publish_scores masks it like the trace.

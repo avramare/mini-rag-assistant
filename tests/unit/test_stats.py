@@ -81,7 +81,24 @@ def test_report_shows_versioning_category_and_run_health_counters():
     # durations: five 1.0 s, 2.0, 3.0, 5.0 -> p50 1.0 s, p95 = 3.0 + 0.65 * 2.0 = 4.3 s
     # (numpy's default linear interpolation between the 7th and 8th sorted values)
     assert "p50 1.0s  p95 4.3s" in text
-    assert ["c", "versioning", "0.0%", "facts_recall", "x2"] in rows(text)
+    assert ["c", "versioning", "0.0%", "facts_recall", "x2", "|", "retrieval", "not", "checked"
+            ] in rows(text)
+
+
+def test_report_splits_failing_items_into_retrieval_miss_and_generation_failure():
+    run = make_run({"a": [False], "b": [False], "d": [True]}, CATEGORIES)
+    recall = {"a": False, "b": True, "d": False}  # d: retrieval missed but the answer passed
+    for ev in run.evaluation.answers:
+        ev.results.append(EvalResult(name="retrieval_recall", applicable=True,
+                                     passed=recall[ev.item_id], gating=False))
+
+    text = report(run)
+
+    assert ["a", "factual", "0.0%", "facts_recall", "x1", "|", "retrieval", "missed", "x1"
+            ] in rows(text)
+    assert ["b", "factual", "0.0%", "facts_recall", "x1", "|", "retrieval", "ok"] in rows(text)
+    assert not any(row[:1] == ["d"] for row in rows(text))  # a diagnostic miss is not a failure
+    assert "retrieval_recall 3 2 diagnostic, not in pass rate" in " ".join(text.split())
 
 
 def test_compare_refuses_runs_with_different_as_of():

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.dataset import DatasetError, check_facts_in_corpus, load_dataset
+from evals.dataset import DatasetError, check_expected_docs, check_facts_in_corpus, load_dataset
 from mini_rag.config import PROJECT_ROOT
 from mini_rag.documents import load_documents
 from mini_rag.users import load_users
@@ -31,6 +31,35 @@ def test_draft_dataset_facts_appear_verbatim_in_the_real_corpus():
         "injection": 2, "versioning": 4}
 
 
+def test_every_answerable_draft_item_names_readable_expected_docs():
+    # Without expected_docs a failed answer cannot be split into retrieval vs generation failure.
+    users = load_users(PROJECT_ROOT / "data" / "users.yaml")
+    dataset = load_dataset(EVALS / "dataset.draft.jsonl", set(users))
+
+    check_expected_docs(dataset, load_documents(PROJECT_ROOT / "data" / "docs"), users)
+    assert [i.id for i in dataset.items if not i.should_refuse and not i.expected_docs] == []
+
+
+@pytest.mark.security
+@pytest.mark.parametrize("user, doc_id, reason", [
+    ("analyst", "orion-budget", "'orion-budget' not readable by analyst"),
+    ("lead", "no-such-doc", "'no-such-doc' not in corpus"),
+], ids=["restricted-for-analyst", "unknown-doc"])
+def test_expected_doc_must_exist_and_be_readable_by_the_item_user(
+        tmp_path: Path, docs_dir, analyst, lead, user: str, doc_id: str, reason: str):
+    # Expecting a restricted doc for the analyst would make retrieval_recall reward a leak and
+    # penalize a correct access filter.
+    path = write_dataset(tmp_path / "d.jsonl", [dataset_item("x", user, "Q?", docs=[doc_id])])
+    dataset = load_dataset(path, USERS)
+    docs = load_documents(docs_dir)
+
+    with pytest.raises(DatasetError, match=reason):
+        check_expected_docs(dataset, docs, {"analyst": analyst, "lead": lead})
+    readable = load_dataset(write_dataset(tmp_path / "ok.jsonl", [
+        dataset_item("x", "lead", "Q?", docs=["orion-budget"])]), USERS)
+    check_expected_docs(readable, docs, {"analyst": analyst, "lead": lead})  # control: no raise
+
+
 def test_draft_versioning_asks_orion_on_both_sides_of_v2_effective_date():
     dataset = load_dataset(EVALS / "dataset.draft.jsonl", USERS)
     orion = [i for i in dataset.items if i.category == "versioning" and "Orion" in i.question]
@@ -49,8 +78,10 @@ def test_draft_versioning_asks_orion_on_both_sides_of_v2_effective_date():
     (dataset_item("x", "analyst", "Q?", expected=[[]]), "non-empty"),
     (dataset_item("x", "lead", "Q?", category="versioning", expected=["4.2 million"]),
      "versioning items need forbidden_facts"),
+    (dataset_item("x", "analyst", "Q?", should_refuse=True, docs=["holiday-policy"]),
+     "should_refuse items cannot have expected_docs"),
 ], ids=["category-typo", "unknown-user", "refuse-with-facts", "answer-in-question", "empty-fact",
-        "versioning-without-wrong-version"])
+        "versioning-without-wrong-version", "refuse-with-docs"])
 def test_invalid_item_is_rejected_with_reason(tmp_path: Path, item: dict, reason: str):
     path = write_dataset(tmp_path / "d.jsonl", [item])
 

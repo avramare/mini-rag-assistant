@@ -20,6 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from mini_rag.documents import Document
+from mini_rag.users import User
 
 CATEGORIES = frozenset(
     {"factual", "multi_doc", "unanswerable", "restricted_probe", "injection", "versioning"}
@@ -62,6 +63,10 @@ class DatasetItem(BaseModel):
     forbidden_facts: list[Fact]
     should_refuse: bool
     as_of: date | None = None
+    # Docs retrieval must return for the item to be answerable (for versioned policies: the
+    # version in force on as_of). Optional; grades `retrieval_recall`, a diagnostic that tells a
+    # retrieval miss from a generation failure.
+    expected_docs: list[str] = []
 
     @field_validator("category")
     @classmethod
@@ -137,6 +142,8 @@ def _check_item(item: DatasetItem, known_users: set[str], where: str) -> None:
         raise DatasetError(f"{where}: unknown user '{item.user}'")
     if item.should_refuse and item.expected_facts:
         raise DatasetError(f"{where}: should_refuse items cannot have expected_facts")
+    if item.should_refuse and item.expected_docs:
+        raise DatasetError(f"{where}: should_refuse items cannot have expected_docs")
     if item.category == "versioning" and not item.forbidden_facts:
         # The value of the version NOT in force (superseded or not yet effective) is what a wrong
         # answer contains. `forbidden_absent` then catches it independently of the judge.
@@ -164,6 +171,22 @@ def check_facts_in_corpus(dataset: Dataset, docs: list[Document]) -> None:
         raise DatasetError("facts not found verbatim in the corpus: " + "; ".join(missing))
 
 
+def check_expected_docs(dataset: Dataset, docs: list[Document], users: dict[str, User]) -> None:
+    """Every expected doc must exist and be readable by the item's user. Expecting a doc the user
+    may not see would make `retrieval_recall` reward a leak and fail a correct access filter."""
+    by_id = {d.id: d for d in docs}
+    problems = []
+    for item in dataset.items:
+        for doc_id in item.expected_docs:
+            doc = by_id.get(doc_id)
+            if doc is None:
+                problems.append(f"{item.id}: '{doc_id}' not in corpus")
+            elif not users[item.user].can_read(doc.access):
+                problems.append(f"{item.id}: '{doc_id}' not readable by {item.user}")
+    if problems:
+        raise DatasetError("invalid expected_docs: " + "; ".join(problems))
+
+
 def main() -> int:
     from mini_rag.config import Settings
     from mini_rag.documents import load_documents
@@ -173,9 +196,12 @@ def main() -> int:
         print("usage: python -m evals.dataset validate <path>")
         return 2
     s = Settings()
+    users = load_users(s.users_file)
+    docs = load_documents(s.docs_dir)
     try:
-        dataset = load_dataset(Path(sys.argv[2]), set(load_users(s.users_file)))
-        check_facts_in_corpus(dataset, load_documents(s.docs_dir))
+        dataset = load_dataset(Path(sys.argv[2]), set(users))
+        check_facts_in_corpus(dataset, docs)
+        check_expected_docs(dataset, docs, users)
     except DatasetError as exc:
         print(f"[fail] {exc}")
         return 1

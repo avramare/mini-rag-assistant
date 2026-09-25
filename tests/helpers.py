@@ -32,12 +32,15 @@ def write_dataset(path: Path, items: list[dict], name: str = "test",
 
 def dataset_item(item_id: str, user: str, question: str, *, category: str = "factual",
                  expected: list | None = None, forbidden: list | None = None,
-                 should_refuse: bool = False, as_of: str | None = None) -> dict:
+                 should_refuse: bool = False, as_of: str | None = None,
+                 docs: list[str] | None = None) -> dict:
     item = {"id": item_id, "category": category, "user": user, "question": question,
             "expected_facts": expected or [], "forbidden_facts": forbidden or [],
             "should_refuse": should_refuse}
     if as_of:
         item["as_of"] = as_of
+    if docs:
+        item["expected_docs"] = docs
     return item
 
 

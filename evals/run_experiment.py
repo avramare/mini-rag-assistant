@@ -20,7 +20,13 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from evals.dataset import Dataset, DatasetError, check_facts_in_corpus, load_dataset
+from evals.dataset import (
+    Dataset,
+    DatasetError,
+    check_expected_docs,
+    check_facts_in_corpus,
+    load_dataset,
+)
 from evals.evaluators import Corpus, answer_passed, run_code_evaluators
 from evals.judge import JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
 from evals.publish import LangfusePublisher, NoopPublisher, Publisher, publish_scores
@@ -188,6 +194,7 @@ def main() -> int:
         if args.command == "generate":
             dataset = load_dataset(args.dataset, set(users))
             check_facts_in_corpus(dataset, docs)
+            check_expected_docs(dataset, docs, users)
             client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx)
             retriever = Retriever(docs, client, cache_dir=s.cache_dir)
             tracer = NoopTracer() if langfuse is None else LangfuseTracer(langfuse)
@@ -212,6 +219,7 @@ def main() -> int:
             run = load(path)
             dataset = load_dataset(Path(run.config["dataset"]["path"]), set(users))
             check_facts_in_corpus(dataset, docs)
+            check_expected_docs(dataset, docs, users)
             judge = judge_info = None
             if not args.no_judge:
                 judge = OllamaClient(s.ollama_host, s.judge_model, s.embed_model,

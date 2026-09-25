@@ -71,6 +71,7 @@ def report(run: RunResults) -> str:
         lines.append(f"{category:<18}{n:>6}{_pct(rate):>11}{flag}")
 
     applicable, failed = Counter(), Counter()
+    diagnostic: set[str] = set()
     judge_errors = 0
     for ev in run.evaluation.answers:
         for r in ev.results:
@@ -78,8 +79,12 @@ def report(run: RunResults) -> str:
                 applicable[r.name] += 1
                 failed[r.name] += not r.passed
                 judge_errors += r.detail.startswith("judge_error")
+                if not r.gating:
+                    diagnostic.add(r.name)
     lines += ["", f"{'evaluator':<20}{'applicable':>11}{'failed':>8}"]
-    lines += [f"{name:<20}{applicable[name]:>11}{failed[name]:>8}" for name in applicable]
+    lines += [f"{name:<20}{applicable[name]:>11}{failed[name]:>8}"
+              + ("  diagnostic, not in pass rate" if name in diagnostic else "")
+              for name in applicable]
     if judge_errors:
         lines.append(f"judge errors (counted as fails): {judge_errors}")
 
@@ -99,16 +104,27 @@ def report(run: RunResults) -> str:
 
     categories = {a.item_id: a.category for a in answers}
     failing = defaultdict(Counter)
+    # item -> [repeats where retrieval missed an expected doc, repeats where it was checked]
+    retrieval: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for ev in run.evaluation.answers:
         for r in ev.results:
-            if r.applicable and not r.passed:
+            if r.applicable and not r.passed and r.gating:
                 failing[ev.item_id][r.name] += 1
+            if r.applicable and r.name == "retrieval_recall":
+                retrieval[ev.item_id][0] += not r.passed
+                retrieval[ev.item_id][1] += 1
     rates = item_pass_rates(run)
     if failing:
-        lines += ["", "Failing items (pass rate, failed evaluator x repeats):"]
+        # The retrieval note separates the two failure sources: a missed doc is a retrieval
+        # failure; all expected docs in the context means generation did not use them.
+        lines += ["", "Failing items (pass rate, failed evaluator x repeats, retrieval):"]
         for item in sorted(failing, key=lambda i: (categories[i], i)):
             reasons = ", ".join(f"{name} x{count}" for name, count in failing[item].items())
-            lines.append(f"  {item:<11}{categories[item]:<18}{_pct(rates[item])}  {reasons}")
+            missed, checked = retrieval.get(item, (0, 0))
+            where = ("retrieval not checked" if not checked else
+                     f"retrieval missed x{missed}" if missed else "retrieval ok")
+            lines.append(f"  {item:<11}{categories[item]:<18}{_pct(rates[item])}  {reasons}"
+                         f"  | {where}")
     return "\n".join(lines)
 
 

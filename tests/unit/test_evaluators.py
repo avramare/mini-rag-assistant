@@ -10,6 +10,8 @@ from evals.evaluators import (
     facts_recall,
     forbidden_absent,
     refusal_correct,
+    retrieval_recall,
+    run_code_evaluators,
     schema_valid,
 )
 from evals.judge import judge_faithfulness
@@ -114,6 +116,31 @@ def test_answer_passes_only_if_all_applicable_evaluators_pass():
 
     assert answer_passed([ok, na]) is True
     assert answer_passed([ok, bad, na]) is False
+
+
+def test_retrieval_recall_separates_missed_doc_from_found_doc(corpus):
+    expected = item(expected_docs=["holiday-policy", "budget-process"])
+
+    half = retrieval_recall(expected, record(), corpus)  # only holiday-policy retrieved
+    full = retrieval_recall(expected, record(retrieved={"holiday-policy": Access.PUBLIC,
+                                                        "budget-process": Access.PUBLIC}), corpus)
+
+    assert (half.passed, half.value, half.detail) == (False, 0.5,
+                                                      "found 1/2, missing ['budget-process']")
+    assert (full.passed, full.value) == (True, 1.0)
+    assert retrieval_recall(item(), record(), corpus).applicable is False
+
+
+def test_retrieval_miss_is_diagnostic_and_does_not_fail_a_correct_answer(corpus):
+    # A fact can live in several docs; the answer is what the user sees. A retrieval miss must
+    # explain failures, not create them.
+    good = item(expected_facts=["27 days"], expected_docs=["budget-process"])
+
+    results = run_code_evaluators(good, record("27 days."), corpus)
+
+    recall = next(r for r in results if r.name == "retrieval_recall")
+    assert recall.applicable and recall.passed is False and recall.gating is False
+    assert answer_passed(results) is True
 
 
 def judge_reply(score: int, reason: str = "Supported.") -> str:
