@@ -1,11 +1,12 @@
 # Status
 
 ## Current
-Phase 3 committed 2026-09-25 (68dcd33) plus follow-ups through 2026-09-27: judge v4 (in-force labels computed
-in code), judge v5 (3-sentence reason, output cap 256), judge cost in the report, filtered dev runs
-(`generate --items/--category`).
-Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat) holds four evaluations; v3, v4 and v5 all 86.7%
-item-level (26/30, n=30), identical pass/fail. Latest = v5 `3870776dcad7-np256`.
+Phase 4 (noise) tooling built 2026-09-27 (DECISIONS 36-38): frozen config (`freeze`, `--frozen`), prompt-eval vs
+reply timing, `rejudge` judge samples, `stats noise`, paired-bootstrap `compare`, Langfuse-failure bookkeeping +
+`publish`, idempotent `--resume`, `scripts/night_run.ps1`. 241 tests.
+Dry run `20260927-dry` (ver-01, fact-01; R = 2, K = 1; frozen): killed mid-generate and mid-evaluate, re-run
+with the same command -> 4 answers, 4 grades, 2 sample grades, all unique, 0 Langfuse failures.
+`evals/frozen/phase4-draft.json` written by `freeze`, NOT committed yet (Marko reviews and commits).
 
 ## Open items
 - Judge controls (`pytest -m eval tests/eval/test_judge_controls.py`, 6 tests): v5 6/6 in one pytest round and
@@ -41,7 +42,15 @@ item-level (26/30, n=30), identical pass/fail. Latest = v5 `3870776dcad7-np256`.
 - `uv run pytest` broke after the folder rename (stale venv launchers). Fixed with `uv sync --reinstall`;
   close VS Code's Python language server first, it locks `.pyd` files.
 
+- Dry-run timing differs a lot from the smoke run: generation p50 4.2 s (smoke 33.1 s), prompt eval p50 0.2 s
+  once the model is warm; judge p50 42.9 s (smoke 57.7 s). 4 answers only. If it holds, R = 6 + K = 3 takes
+  ~2.5 h, not 4.7-5.9 h, and R could go up. Marko decides R.
+- Dry run already showed ver-01 (Orion) answering the not-in-force 5 million in 2 of 2 repeats, and one judge
+  verdict flip (fact-01 r1: 4 -> 3) in 1 re-sample.
+- test-reviewer pass on the Phase 4 tests: before the phase is marked done.
+
 ## Next
-Marko reviews DECISIONS 33-35 and decides on keeping v5 / the version-item code check. Marko writes
-evals/dataset.jsonl (with expected_docs). Then Phase 4 - noise.
+Marko: review + commit `evals/frozen/phase4-draft.json`, confirm R/K, run the night-run checklist
+(DECISIONS 38), start `scripts/night_run.ps1`. Then interpret `stats noise` and propose the Phase 5 margin.
+Marko writes evals/dataset.jsonl (with expected_docs) in parallel.
 

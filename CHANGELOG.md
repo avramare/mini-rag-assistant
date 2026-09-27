@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-27 - Phase 4 noise tooling
+- Decisions on 3.3 recorded: judge v5 frozen (safer, not faster), versioning stays with `forbidden_absent`
+  (DECISIONS 36-37).
+- Ollama `prompt_eval_duration` / `eval_duration` / `load_duration` recorded per generation and judge call;
+  report shows prompt-eval vs reply p50/p95 and model loads.
+- Frozen config: `run_experiment freeze`, `--frozen` on generate/evaluate/rejudge lists every differing field;
+  tracked changes refuse, untracked files warn.
+- `rejudge`: K judge re-samples of one repeat, stored next to the evaluation, local only.
+- `stats noise`: per-repeat rates, Wilson over items, unstable items with patterns, versioning items, safety
+  failures under no change, unsigned no-change split distribution, paired bootstrap, judge verdict flip rate.
+- `compare`: Wilson per side, paired bootstrap of the mean item delta, items that moved.
+- Langfuse errors never stop a run: recorded in the results file, shown by report, re-sent by `publish`.
+- `--resume` = continue or start, never throw away; `scripts/night_run.ps1` with retries and a log.
+  Dry run killed mid-generate and mid-evaluate: nothing lost or duplicated (DECISIONS 38). 241 tests.
+
 ## 2026-09-27 - Judge v4/v5, judge cost, filtered dev runs
 - Hypothesis "judge misorders only same-year dates" tested with 2028 controls (10 samples each) on v3:
   falsified, 7/10 lenient on a superseded value (DECISIONS 33).
