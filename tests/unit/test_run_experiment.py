@@ -494,3 +494,35 @@ def test_publish_keeps_what_failed_again_for_the_next_attempt(env: Env):
     republish(env.path, env.dataset, down, log=lambda _: None)  # still down
 
     assert Counter(f.kind for f in load(env.path).publish_failures) == {"dataset": 1, "link": 4}
+
+
+def test_evaluate_resume_with_nothing_stored_starts_so_a_night_script_can_always_pass_it(
+        env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+
+    run = env.evaluate(FakeLLM([JUDGE_OK] * 4), resume=True)
+
+    assert run.evaluation()[1].finished_at is not None
+    assert len(run.evaluation()[1].answers) == 4
+
+
+def test_evaluate_resume_on_a_finished_evaluation_changes_nothing(env: Env):
+    # A re-run of the night script after a later step crashed must not re-judge or re-time it.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    before = env.evaluate(FakeLLM([JUDGE_OK] * 4)).evaluations
+
+    judge = FakeLLM([])
+    env.evaluate(judge, resume=True)
+
+    assert judge.calls == [] and load(env.path).evaluations == before
+
+
+def test_evaluate_resume_refuses_to_replace_a_finished_evaluation_graded_on_other_facts(
+        env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_OK] * 4))
+    env.write_items(ORION_Q, orion_facts=["BLUEHERON"])
+
+    with pytest.raises(RunError, match="would be replaced"):
+        env.evaluate(FakeLLM([JUDGE_OK] * 4), resume=True)
+    assert load(env.path).evaluation()[1].finished_at is not None  # still there

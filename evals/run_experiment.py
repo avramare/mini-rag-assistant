@@ -180,6 +180,8 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
 
     key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
     evaluation = start_or_resume(run, key, dataset.sha256, judge_info, resume, log)
+    if evaluation.finished_at is not None:  # --resume on a finished evaluation: nothing to do
+        return run
     items = {i.id: i for i in dataset.items}
     done = {(ev.item_id, ev.repeat) for ev in evaluation.answers}
     for n, record in enumerate(run.answers, 1):
@@ -298,17 +300,28 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
                     judge_info: dict[str, Any] | None, resume: bool, log: Log) -> Evaluation:
     """Resumable = an unfinished evaluation by the same judge (model digest too) against the same
     facts; only then can its grades be mixed with new ones. Without --resume a resumable one is
-    not thrown away by accident; one that can no longer be resumed is replaced."""
+    not thrown away by accident; one that can no longer be resumed is replaced.
+
+    --resume means "continue or start, never throw away", so a night script can always pass it:
+    nothing stored -> start; resumable -> continue; finished by the same judge and facts -> return
+    it as is (the caller does nothing); anything else would be replaced -> refuse."""
     old = run.evaluations.pop(key, None)  # re-inserted below: the one written last is latest
     unfinished = old is not None and old.finished_at is None
-    resumable = unfinished and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
+    same = old is not None and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
+    resumable = unfinished and same
     if resume:
-        if not resumable:
+        if old is not None and not same:
+            run.evaluations[key] = old
             raise RunError(f"no unfinished evaluation by judge {key} with these facts and this "
-                           "judge model to resume; run evaluate without --resume")
-        log(f"resuming judge {key}: {len(old.answers)} of {len(run.answers)} answers done")
-        run.evaluations[key] = old
-        return old
+                           "judge model to resume, and the stored one would be replaced; run "
+                           "evaluate without --resume")
+        if old is not None:
+            state = ("already finished" if not unfinished else
+                     f"resuming: {len(old.answers)} of {len(run.answers)} answers done")
+            log(f"judge {key} {state}")
+            run.evaluations[key] = old
+            return old
+        log(f"judge {key}: nothing to resume, starting")
     if resumable:
         raise RunError(f"judge {key} has an unfinished evaluation ({len(old.answers)} of "
                        f"{len(run.answers)} answers); continue it with --resume")
