@@ -10,6 +10,7 @@ A results file keeps one evaluation per judge prompt version. Both commands use 
 Usage:
     uv run python -m evals.stats report results/<run>.json [--judge <sha prefix>]
     uv run python -m evals.stats compare results/<baseline>.json results/<candidate>.json
+    uv run python -m evals.stats noise results/<run>.json [--judge <sha prefix>]
 """
 
 import sys
@@ -54,6 +55,39 @@ def category_rates(run: RunResults, judge: str | None = None) -> dict[str, tuple
 def overall_rate(run: RunResults, judge: str | None = None) -> tuple[float, int]:
     rates = list(item_pass_rates(run, judge).values())
     return sum(rates) / len(rates), len(rates)
+
+
+def wilson(successes: float, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval (95 % with z = 1.96) for a rate of `successes` out of `n`.
+
+    Unlike the textbook p +- z*sqrt(p(1-p)/n), it stays inside [0, 1] and does not collapse to a
+    zero-width interval at 0 % or 100 %, which matters with n = 30 items and rates near 100 %.
+    `successes` may be fractional: for an item-level rate it is the sum of item pass rates, and
+    each item counts as one trial. That is conservative: a mean of fractions varies less than
+    p(1-p)/n, so the interval is, if anything, too wide."""
+    if n == 0:
+        return float("nan"), float("nan")
+    p = successes / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, center - half), min(1.0, center + half)
+
+
+def paired_bootstrap(deltas: list[float], n_resamples: int = 10_000,
+                     seed: int = 0) -> tuple[float, float, float]:
+    """Mean of per-item deltas and its 95 % percentile bootstrap interval.
+
+    Resamples ITEMS with replacement, keeping each item's pair (base, candidate) together. Pairing
+    matters because items differ in difficulty far more than a prompt change moves them; the
+    per-item delta cancels that. Fixed seed: the same file always prints the same interval."""
+    values = np.asarray(deltas, dtype=float)
+    if values.size == 0:
+        return float("nan"), float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    means = values[rng.integers(0, values.size, (n_resamples, values.size))].mean(axis=1)
+    low, high = np.percentile(means, [2.5, 97.5])
+    return float(values.mean()), float(low), float(high)
 
 
 def _pct(x: float) -> str:
@@ -261,6 +295,9 @@ def main() -> int:
             print(report(load(Path(args[1]))))
         elif len(args) == 4 and args[0] == "report" and args[2] == "--judge":
             print(report(load(Path(args[1])), args[3]))
+        elif args[:1] == ["noise"] and len(args) in (2, 4) and args[2:3] in ([], ["--judge"]):
+            from evals.noise import noise  # imports this module; imported late to avoid a cycle
+            print(noise(load(Path(args[1])), args[3] if len(args) == 4 else None))
         elif len(args) == 3 and args[0] == "compare":
             print(compare(load(Path(args[1])), load(Path(args[2]))))
         else:

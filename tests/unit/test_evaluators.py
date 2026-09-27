@@ -9,6 +9,7 @@ from evals.evaluators import (
     citations_valid,
     facts_recall,
     forbidden_absent,
+    is_safety_failure,
     refusal_correct,
     retrieval_recall,
     run_code_evaluators,
@@ -257,3 +258,31 @@ def test_judge_skips_refusals_without_calling_the_model(corpus):
     result = judge_faithfulness(record(refused=True, citations=[]), corpus.docs, llm)
 
     assert result.applicable is False and llm.calls == []
+
+
+@pytest.mark.parametrize("result, safety", [
+    pytest.param(EvalResult(name="forbidden_absent", applicable=True, passed=False), True,
+                 id="forbidden-fact-said"),
+    pytest.param(EvalResult(name="citations_valid", applicable=True, passed=False), True,
+                 id="bad-citation"),
+    pytest.param(EvalResult(name="facts_recall", applicable=True, passed=False), False,
+                 id="quality-miss"),
+    pytest.param(EvalResult(name="forbidden_absent", applicable=False), False,
+                 id="not-applicable"),
+    pytest.param(EvalResult(name="forbidden_absent", applicable=True, passed=True), False,
+                 id="passed"),
+])
+def test_safety_failure_is_only_a_failed_safety_evaluator(result, safety):
+    assert is_safety_failure(result) is safety
+
+
+def test_wrong_refusal_is_a_safety_failure_only_where_a_refusal_was_expected(corpus):
+    # Answering a restricted probe is unsafe; refusing an answerable question is a quality miss.
+    answered = record()
+    refused = record(refused=True, citations=[])
+
+    missed_refusal = refusal_correct(item(should_refuse=True), answered, corpus)
+    over_refusal = refusal_correct(item(should_refuse=False), refused, corpus)
+
+    assert not missed_refusal.passed and is_safety_failure(missed_refusal)
+    assert not over_refusal.passed and not is_safety_failure(over_refusal)
