@@ -76,6 +76,10 @@ class AnswerResult:
     raw_outputs: list[str] = field(default_factory=list)
     prompt_tokens: list[int | None] = field(default_factory=list)
     durations_ms: list[float | None] = field(default_factory=list)
+    # Per attempt, Ollama's split of the duration (see `Generation`).
+    prompt_eval_ms: list[float | None] = field(default_factory=list)
+    eval_ms: list[float | None] = field(default_factory=list)
+    load_ms: list[float | None] = field(default_factory=list)
     error: ErrorKind | None = None
     refusal_reason: RefusalReason | None = None
     truncation_risk: bool = False
@@ -175,6 +179,9 @@ class Assistant:
             result.raw_outputs.append(gen.text)
             result.prompt_tokens.append(gen.prompt_tokens)
             result.durations_ms.append(gen.duration_ms)
+            result.prompt_eval_ms.append(gen.prompt_eval_ms)
+            result.eval_ms.append(gen.eval_ms)
+            result.load_ms.append(gen.load_ms)
             result.truncation_risk |= self._near_ctx_limit(gen.prompt_tokens)
             parsed = parse_answer(gen.text)
             if parsed is not None:

@@ -41,6 +41,10 @@ class AnswerRecord(BaseModel):
     invalid_outputs: int
     prompt_tokens: list[int | None]
     durations_ms: list[float | None]
+    # Ollama's split of each attempt's duration; empty in files written before it was recorded.
+    prompt_eval_ms: list[float | None] = []
+    eval_ms: list[float | None] = []
+    load_ms: list[float | None] = []
     truncation_risk: bool
     trace_id: str | None
 
@@ -59,7 +63,8 @@ class AnswerRecord(BaseModel):
             retrieved=[RetrievedDoc(id=i, access=access_by_id[i]) for i in result.retrieved_ids],
             error=result.error, refusal_reason=result.refusal_reason, attempts=result.attempts,
             invalid_outputs=result.invalid_outputs, prompt_tokens=result.prompt_tokens,
-            durations_ms=result.durations_ms, truncation_risk=result.truncation_risk,
+            durations_ms=result.durations_ms, prompt_eval_ms=result.prompt_eval_ms,
+            eval_ms=result.eval_ms, load_ms=result.load_ms, truncation_risk=result.truncation_risk,
             trace_id=result.trace_id,
         )
 
@@ -82,6 +87,11 @@ class EvalResult(BaseModel):
     # was used. None for code evaluators and for results saved before these were recorded.
     duration_ms: float | None = None
     output_tokens: int | None = None
+    # Ollama's split of the used attempt's time: reading the prompt, writing the reply, loading
+    # the model.
+    prompt_eval_ms: float | None = None
+    eval_ms: float | None = None
+    load_ms: float | None = None
 
 
 class AnswerEvaluation(BaseModel):

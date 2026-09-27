@@ -82,6 +82,30 @@ def judge_cost(evaluation: Evaluation) -> str:
     return line
 
 
+# A model already in memory loads in well under a second; more means Ollama (re)loaded it, e.g.
+# after its idle timeout. Worth seeing in a night run: the reload is cost, not model speed.
+RELOAD_MS = 1000.0
+
+
+def time_split(label: str, prompt_ms: list[float | None], reply_ms: list[float | None],
+               load_ms: list[float | None]) -> list[str]:
+    """Where a model's time went, from Ollama's own durations: reading the prompt vs writing the
+    reply. On CPU the prompt can dominate; that decides whether a shorter reply saves anything."""
+    prompt = [x for x in prompt_ms if x is not None]
+    reply = [x for x in reply_ms if x is not None]
+    if not prompt or not reply:
+        return [f"{label} time split not recorded (run before it was)"]
+    share = sum(prompt) / (sum(prompt) + sum(reply))
+    lines = []
+    for name, values in (("prompt eval", prompt), ("reply", reply)):
+        p50, p95 = np.percentile(values, [50, 95])
+        lines.append(f"{label} {name:<11} p50 {p50 / 1000:5.1f}s  p95 {p95 / 1000:5.1f}s")
+    reloads = sum(x > RELOAD_MS for x in load_ms if x is not None)
+    lines.append(f"{label} prompt eval share of model time {_pct(share).strip()}  "
+                 f"model loads > {RELOAD_MS / 1000:g}s: {reloads}")
+    return lines
+
+
 def filter_label(run_filter: dict) -> str:
     return "  ".join(f"{k} {','.join(v)}" for k, v in run_filter.items() if v)
 
@@ -137,6 +161,10 @@ def report(run: RunResults, judge: str | None = None) -> str:
                      f"judge timeouts (incl. retried) {judge_timeouts}  "
                      f"cut off at output cap (incl. retried) {judge_truncated}")
         lines.append(judge_cost(evaluation))
+        judged = [r for ev in evaluation.answers for r in ev.results
+                  if r.name == "judge_faithfulness" and r.applicable]
+        lines += time_split("judge", [r.prompt_eval_ms for r in judged],
+                            [r.eval_ms for r in judged], [r.load_ms for r in judged])
 
     refusals = Counter(a.refusal_reason or "-" for a in answers)
     errors = Counter(a.error or "-" for a in answers)
@@ -150,6 +178,9 @@ def report(run: RunResults, judge: str | None = None) -> str:
         f"truncation_risk {sum(a.truncation_risk for a in answers)}",
         f"generation duration p50 {p50 / 1000:.1f}s  p95 {p95 / 1000:.1f}s  "
         f"({len(durations)} calls, linear interpolation)",
+        *time_split("generation", [x for a in answers for x in a.prompt_eval_ms],
+                    [x for a in answers for x in a.eval_ms],
+                    [x for a in answers for x in a.load_ms]),
     ]
 
     categories = {a.item_id: a.category for a in answers}

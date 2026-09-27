@@ -212,3 +212,38 @@ def test_report_header_shows_generation_and_evaluation_dataset_hashes():
 
     assert ("generated with dddddddddddd  evaluated with eeeeeeeeeeee  "
             "(grading fields changed after generation)") in report(run)
+
+
+def test_report_splits_generation_and_judge_time_into_prompt_eval_and_reply():
+    # Decides whether a shorter reply can save time at all: on CPU the prompt may dominate.
+    run = make_run({"a": [True, True]}, CATEGORIES)
+    for record, prompt_ms, load in zip(run.answers, [3000.0, 5000.0], [100.0, 4000.0],
+                                       strict=True):
+        record.prompt_eval_ms, record.eval_ms, record.load_ms = [prompt_ms], [1000.0], [load]
+    evaluation = run.evaluation()[1]
+    evaluation.judge = JUDGE
+    for ev in evaluation.answers:
+        ev.results.append(EvalResult(name="judge_faithfulness", applicable=True, passed=True,
+                                     value=5, prompt_eval_ms=2000.0, eval_ms=6000.0,
+                                     load_ms=50.0))
+
+    text = " ".join(report(run).split())
+
+    assert "generation prompt eval p50 4.0s p95 4.9s" in text
+    assert "generation reply p50 1.0s p95 1.0s" in text
+    # 8 s prompt of 10 s model time; one call loaded the model (4 s > 1 s)
+    assert "generation prompt eval share of model time 80.0% model loads > 1s: 1" in text
+    assert "judge prompt eval share of model time 25.0% model loads > 1s: 0" in text
+
+
+def test_report_says_time_split_missing_for_runs_recorded_before_it():
+    # Old results files have no split; the report must say so, not show 0 s or crash.
+    run = make_run(PASSES, CATEGORIES)
+    old = run.model_dump(mode="json")
+    for record in old["answers"]:
+        for key in ("prompt_eval_ms", "eval_ms", "load_ms"):
+            del record[key]
+
+    text = report(RunResults.model_validate(old))
+
+    assert "generation time split not recorded (run before it was)" in text

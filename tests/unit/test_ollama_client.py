@@ -18,6 +18,9 @@ CHAT_REPLY = {
     "prompt_eval_count": 812,
     "eval_count": 40,
     "total_duration": 1_500_000_000,  # nanoseconds
+    "prompt_eval_duration": 1_100_000_000,
+    "eval_duration": 300_000_000,
+    "load_duration": 20_000_000,
 }
 
 
@@ -96,6 +99,8 @@ def test_usage_numbers_are_mapped_from_ollama_reply():
     assert gen.text == CHAT_REPLY["message"]["content"]
     assert (gen.prompt_tokens, gen.completion_tokens) == (812, 40)
     assert gen.duration_ms == pytest.approx(1500.0)
+    # Where the time went: the report's prompt-vs-reply split is only as right as this mapping.
+    assert (gen.prompt_eval_ms, gen.eval_ms, gen.load_ms) == pytest.approx((1100.0, 300.0, 20.0))
 
 
 def test_output_cap_is_sent_only_when_configured():
@@ -124,6 +129,7 @@ def test_missing_usage_numbers_become_none_not_zero():
     gen = make_client(server).generate("sys", "prompt", ANSWER_SCHEMA)
 
     assert (gen.prompt_tokens, gen.completion_tokens, gen.duration_ms) == (None, None, None)
+    assert (gen.prompt_eval_ms, gen.eval_ms, gen.load_ms) == (None, None, None)
     assert gen.truncated is False  # a missing done_reason is no evidence of a cut-off reply
 
 

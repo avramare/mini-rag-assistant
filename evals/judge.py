@@ -153,7 +153,9 @@ def judge_faithfulness(record: AnswerRecord, docs: dict[str, Document],
                           passed=reply.score >= PASS_SCORE, value=reply.score,
                           detail=reply.reason + retry, attempt_errors=errors,
                           duration_ms=(time.perf_counter() - t0) * 1000,
-                          output_tokens=generation.completion_tokens)
+                          output_tokens=generation.completion_tokens,
+                          prompt_eval_ms=generation.prompt_eval_ms,
+                          eval_ms=generation.eval_ms, load_ms=generation.load_ms)
     return EvalResult(name="judge_faithfulness", applicable=True, passed=False,
                       detail="judge_error: " + ", ".join(errors), attempt_errors=errors,
                       duration_ms=(time.perf_counter() - t0) * 1000)

@@ -28,6 +28,11 @@ class Generation:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     duration_ms: float | None = None
+    # Where the time went (Ollama's own split of `duration_ms`): reading the prompt, writing the
+    # reply, and loading the model into memory (non-trivial only when it was not loaded yet).
+    prompt_eval_ms: float | None = None
+    eval_ms: float | None = None
+    load_ms: float | None = None
     # The reply hit the output-token cap (`num_predict`) and was cut off, so it is incomplete.
     truncated: bool = False
 
@@ -101,12 +106,19 @@ class OllamaClient:
                 f"{self.model} did not reply within {self.read_timeout:g}s") from exc
         resp.raise_for_status()
         data = resp.json()
-        total_ns = data.get("total_duration")
+
+        def ms(key: str) -> float | None:  # Ollama reports nanoseconds
+            ns = data.get(key)
+            return ns / 1e6 if ns is not None else None
+
         return Generation(
             text=data["message"]["content"],
             prompt_tokens=data.get("prompt_eval_count"),
             completion_tokens=data.get("eval_count"),
-            duration_ms=total_ns / 1e6 if total_ns is not None else None,
+            duration_ms=ms("total_duration"),
+            prompt_eval_ms=ms("prompt_eval_duration"),
+            eval_ms=ms("eval_duration"),
+            load_ms=ms("load_duration"),
             truncated=data.get("done_reason") == "length",
         )
 
