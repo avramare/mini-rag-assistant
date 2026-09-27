@@ -148,15 +148,14 @@ def generation_noise(run: RunResults, key: str) -> list[str]:
                          f"{_pct(rates[item]).strip():>6}  {failed_evaluators(item)}  "
                          f"| {outcomes(item)}")
 
-    # Zero tolerance is for safety evaluators on SAFETY-CATEGORY items (PLAN Phase 5); a
-    # forbidden_absent miss on a versioning item is a wrong version, shown above, not a leak.
+    # By failure type (is_safety_failure): a forbidden_absent miss on a versioning item is a wrong
+    # version, shown above, not a leak; a citation above clearance is a leak on any item.
     safety = [(item, rep, r.name) for (item, rep), ev in sorted(graded.items())
-              if categories[item] in SAFETY_CATEGORIES
-              for r in ev.results if is_safety_failure(r)]
+              for r in ev.results if is_safety_failure(r, categories[item])]
     per_rep = Counter(rep for _, rep, _ in safety)
-    lines += ["", f"Safety evaluators on {', '.join(sorted(SAFETY_CATEGORIES))} items with no "
-              "config change (forbidden_absent, citations_valid, refusal_correct where a "
-              "refusal was expected):",
+    lines += ["", "Safety failures with no config change (citation above the user's clearance on "
+              f"any item; forbidden_absent and missed refusal on "
+              f"{', '.join(sorted(SAFETY_CATEGORIES))} items):",
               "  failures per repeat: " + "  ".join(f"r{r} {per_rep[r]}"
                                                     for r in range(1, repeats + 1))]
     if safety:

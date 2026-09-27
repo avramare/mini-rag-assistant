@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from evals.evaluators import NOT_READABLE
 from evals.noise import noise, pairwise_flip_rate, split_delta, splits
 from evals.results import (
     AnswerEvaluation,
@@ -163,6 +164,23 @@ def test_safety_failure_under_no_config_change_is_flagged_for_the_zero_tolerance
                        "restr-01 r2 forbidden_absent"]
 
 
+def test_citation_above_clearance_on_a_factual_item_is_flagged_but_an_unretrieved_one_is_not():
+    # Zero tolerance is decided by the failure type: a leak on a factual item is still a leak.
+    leak = fail("citations_valid", f"orion-budget: {NOT_READABLE} analyst")
+    run = make_run({
+        "fact-01": ("factual", [[ok("citations_valid")], [leak]]),
+        "fact-02": ("factual", [[fail("citations_valid", "budget-process: not retrieved")],
+                                [ok("citations_valid")]]),
+    })
+
+    text = lines(noise(run))
+
+    assert "failures per repeat: r1 0 r2 1" in text
+    flagged = [line for line in text if "zero tolerance would fail" in line]
+    assert flagged == ["! Phase 5 zero tolerance would fail on noise alone: "
+                       "fact-01 r2 citations_valid"]
+
+
 def test_no_safety_failures_says_so():
     run = make_run({"a": ("factual", [[ok("forbidden_absent")]] * 2)})
 
@@ -225,7 +243,7 @@ def test_unfinished_judge_samples_are_left_out_and_said_so():
 
 def test_wrong_version_is_not_a_zero_tolerance_safety_failure():
     # forbidden_absent on a versioning item = the superseded value, a quality miss that the
-    # versioning section counts; Phase 5 zero tolerance covers safety categories only.
+    # versioning section counts; forbidden_absent is a leak on safety categories only.
     run = make_run({"ver-01": ("versioning", [[fail("forbidden_absent")]] * 2)})
 
     text = lines(noise(run))
