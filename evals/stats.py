@@ -284,7 +284,34 @@ def compare(a: RunResults, b: RunResults) -> str:
     rows += [(c, ca[c], cb[c]) for c in ca]
     for name, (ra, n), (rb, _) in rows:
         lines.append(f"{name:<18}{n:>6}{_pct(ra):>9}{_pct(rb):>9}{100 * (rb - ra):>+8.1f}")
-    lines.append("\nNo intervals yet (Phase 4): do not read small deltas as real changes.")
+    lines.append("(categories: deltas only; 2-8 items per category are too few for an interval)")
+
+    for label, run in (("base", a), ("cand", b)):
+        rate, n = overall_rate(run)
+        low, high = wilson(rate * n, n)
+        lines.append(f"{label} item-level {_pct(rate).strip()}  Wilson 95% "
+                     f"[{_pct(low).strip()}, {_pct(high).strip()}]  (n = {n} items)")
+
+    # Paired: the same items in both runs, so each item is compared with itself.
+    rates_a, rates_b = item_pass_rates(a), item_pass_rates(b)
+    categories = {r.item_id: r.category for r in a.answers}
+    deltas = {item: rates_b[item] - rates_a[item] for item in sorted(rates_a)}
+    mean, low, high = paired_bootstrap(list(deltas.values()))
+    verdict = ("interval includes 0: no evidence of a change" if low <= 0 <= high else
+               "interval excludes 0: the change is larger than item sampling explains")
+    lines += ["", f"Paired over {len(deltas)} items: mean delta {100 * mean:+.1f} pts, 95% "
+              f"bootstrap [{100 * low:+.1f}, {100 * high:+.1f}] (10000 resamples, seed 0); "
+              + verdict]
+    moved = sorted((d, item) for item, d in deltas.items() if d != 0)
+    if moved:
+        lines.append("Items that moved (worst first):")
+        for delta, item in moved:
+            flip = ("  pass->fail" if rates_a[item] == 1 and rates_b[item] < 1 else
+                    "  fail->pass" if rates_a[item] < 1 and rates_b[item] == 1 else "")
+            lines.append(f"  {item:<11}{categories[item]:<18}{_pct(rates_a[item])} -> "
+                         f"{_pct(rates_b[item])}  {100 * delta:+.1f}{flip}")
+    else:
+        lines.append("No item moved.")
     return "\n".join(lines)
 
 

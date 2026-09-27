@@ -256,3 +256,31 @@ def test_report_names_the_frozen_config_a_run_was_generated_under():
     run.config["frozen"] = {"path": "evals/frozen/p4.json", "sha256": "f" * 64}
 
     assert "frozen config evals/frozen/p4.json (ffffffffffff)" in report(run)
+
+
+def test_compare_is_paired_per_item_and_names_items_that_flipped_pass_to_fail():
+    base = make_run(PASSES, CATEGORIES)  # item rates a 0.5, b 1, c 0, d 1
+    candidate = make_run(PASSES | {"b": [True, False], "c": [True, True]}, CATEGORIES)
+    candidate.config["name"] = "cand"
+
+    text = compare(base, candidate)
+    normalized = [" ".join(line.split()) for line in text.splitlines()]
+
+    # per-item deltas 0, -0.5, +1, 0 -> mean +12.5 pts
+    assert any(line.startswith("Paired over 4 items: mean delta +12.5 pts, 95% bootstrap")
+               for line in normalized)
+    moved = normalized[normalized.index("Items that moved (worst first):") + 1:]
+    assert moved == ["b factual 100.0% -> 50.0% -50.0 pass->fail",
+                     "c versioning 0.0% -> 100.0% +100.0 fail->pass"]
+    assert "base item-level 62.5% Wilson 95% [21.9%, 90.8%] (n = 4 items)" in normalized
+
+
+def test_compare_of_identical_runs_reports_a_zero_width_interval_and_no_moved_item():
+    base = make_run(PASSES, CATEGORIES)
+    same = make_run(PASSES, CATEGORIES)
+
+    text = compare(base, same)
+
+    assert "mean delta +0.0 pts, 95% bootstrap [+0.0, +0.0]" in text
+    assert "interval includes 0: no evidence of a change" in text
+    assert "No item moved." in text
