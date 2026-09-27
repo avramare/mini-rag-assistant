@@ -70,19 +70,21 @@ class Env:
         return lambda as_of: Assistant(self.retriever, llm, k=k, today=lambda: as_of,
                                        num_ctx=4096, tracer=tracer)
 
-    def config(self, llm: FakeLLM, k: int = 3, run_filter: dict | None = None) -> dict:
+    def config(self, llm: FakeLLM, k: int = 3, run_filter: dict | None = None,
+               repeats: int = 2) -> dict:
         dataset = filter_dataset(self.dataset, run_filter)
         return build_config("run", dataset, self.assistant_for(llm, k)(dataset.as_of),
-                            2, {"fake-llm": None}, {"git_commit": "abc", "git_dirty": False},
+                            repeats, {"fake-llm": None}, {"git_commit": "abc", "git_dirty": False},
                             run_filter)
 
     def generate(self, *responses: str, resume: bool = False, k: int = 3,
-                 run_filter: dict | None = None, publisher=None, tracer=None):
+                 run_filter: dict | None = None, publisher=None, tracer=None,
+                 repeats: int = 2):
         llm = FakeLLM(responses)
         assistant_for = self.assistant_for(llm, k, tracer)
         run = generate(filter_dataset(self.dataset, run_filter), assistant_for,
                        self.users, {d.id: d.access for d in self.docs},
-                       self.config(llm, k, run_filter), self.path,
+                       self.config(llm, k, run_filter, repeats), self.path,
                        publisher or NoopPublisher(), resume=resume, log=lambda _: None)
         return run, llm
 
@@ -526,3 +528,53 @@ def test_evaluate_resume_refuses_to_replace_a_finished_evaluation_graded_on_othe
     with pytest.raises(RunError, match="would be replaced"):
         env.evaluate(FakeLLM([JUDGE_OK] * 4), resume=True)
     assert load(env.path).evaluation()[1].finished_at is not None  # still there
+
+
+# --- repeats may only grow (a night run can be extended, never shrunk) -----------------------
+
+def test_resume_with_more_repeats_adds_only_the_missing_ones_and_records_when(env: Env):
+    first, _ = env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+
+    run, llm = env.generate(HOLIDAY, ORION, resume=True, repeats=3)
+
+    assert len(llm.calls) == 2  # r3 only; r1-r2 were not asked again
+    assert run.answers[:4] == first.answers
+    assert [(a.item_id, a.repeat) for a in run.answers[4:]] == [("hol", 3), ("orion", 3)]
+    saved = load(env.path).config
+    assert saved["repeats"] == 3
+    assert saved["langfuse_runs"] == ["run-r1", "run-r2", "run-r3"]
+    assert [(h["from"], h["to"]) for h in saved["repeats_history"]] == [(2, 3)]
+    assert all(a.generated_at is not None for a in run.answers)
+    assert min(a.generated_at for a in run.answers[4:]) >= max(
+        a.generated_at for a in first.answers)
+
+
+def test_resume_with_fewer_repeats_refuses_and_leaves_the_run_untouched(env: Env):
+    # Fewer repeats would leave stored answers outside the run's own repeat count.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    before = env.path.read_bytes()
+
+    with pytest.raises(RunError, match="repeats can only grow: the run has 2, asked for 1"):
+        env.generate(HOLIDAY, resume=True, repeats=1)
+
+    assert env.path.read_bytes() == before
+
+
+def test_grown_run_is_not_reported_until_evaluate_resume_grades_the_new_repeat(env: Env):
+    # Without reopening, evaluate --resume would say "already finished" and the noise report
+    # would cover r1-r2 only, or crash on r3.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    old = env.evaluate(FakeLLM([JUDGE_OK] * 4)).evaluation()[1].answers
+    env.generate(HOLIDAY, ORION, resume=True, repeats=3)
+
+    with pytest.raises(ValueError, match="covers 4 of 6 answers"):
+        report(load(env.path))
+
+    judge = FakeLLM([JUDGE_OK] * 2)
+    run = env.evaluate(judge, resume=True)
+
+    evaluation = run.evaluation()[1]
+    assert len(judge.calls) == 2  # only the new answers were judged
+    assert evaluation.finished_at is not None and evaluation.answers[:4] == old
+    assert {ev.repeat for ev in evaluation.answers[4:]} == {3}
+    report(load(env.path))  # complete again

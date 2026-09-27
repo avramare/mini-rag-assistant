@@ -250,3 +250,16 @@ def test_wrong_version_is_not_a_zero_tolerance_safety_failure():
 
     assert "failures per repeat: r1 0 r2 0" in text
     assert not any("zero tolerance would fail" in line for line in text)
+
+
+def test_report_shows_when_each_repeat_was_generated_and_that_repeats_were_added():
+    # A repeat added on another night can differ in ways the frozen config does not see.
+    run = make_run({"a": ("factual", [[ok("facts_recall")]] * 2)})
+    run.answers[0].generated_at = datetime(2026, 9, 28, 22, 5, tzinfo=UTC)
+    run.answers[1].generated_at = datetime(2026, 9, 29, 23, 40, tzinfo=UTC)
+    run.config["repeats_history"] = [{"from": 1, "to": 2, "at": "2026-09-29T23:39:00+00:00"}]
+
+    text = lines(noise(run))
+
+    assert "repeats grown 1 -> 2 at 2026-09-29T23:39:00+00:00" in text
+    assert "Generated (UTC): r1 2026-09-28 22:05-22:05 r2 2026-09-29 23:40-23:40" in text

@@ -10,6 +10,7 @@ question are not independent. Intervals are over items.
 """
 
 from collections import Counter, defaultdict
+from datetime import datetime
 from itertools import combinations
 
 import numpy as np
@@ -247,6 +248,16 @@ def judge_noise(run: RunResults, key: str) -> list[str]:
     return lines
 
 
+def generation_times(run: RunResults) -> dict[int, tuple[datetime, datetime]]:
+    """repeat -> (first, last) answer time. Repeats added on another night can differ in ways the
+    frozen config does not see (machine load, Ollama version), so the report shows when."""
+    times: dict[int, list[datetime]] = defaultdict(list)
+    for a in run.answers:
+        if a.generated_at is not None:
+            times[a.repeat].append(a.generated_at)
+    return {r: (min(t), max(t)) for r, t in sorted(times.items())}
+
+
 def noise(run: RunResults, judge: str | None = None) -> str:
     key, evaluation = finished(run, judge)
     lines = [f"Run {run.config['name']}  {judge_label(key, evaluation)}  "
@@ -256,6 +267,12 @@ def noise(run: RunResults, judge: str | None = None) -> str:
                      f"({run.config['frozen']['sha256'][:12]})")
     if run.config.get("filter"):
         lines.append("FILTERED dev run: numbers cover the selected items only")
+    for step in run.config.get("repeats_history", []):
+        lines.append(f"repeats grown {step['from']} -> {step['to']} at {step['at']}")
+    generated = generation_times(run)
+    if generated:
+        lines.append("Generated (UTC): " + "  ".join(
+            f"r{r} {first:%Y-%m-%d %H:%M}-{last:%H:%M}" for r, (first, last) in generated.items()))
     lines.append("")
     lines += generation_noise(run, key)
     lines += split_distribution(run, key)

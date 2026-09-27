@@ -16,6 +16,9 @@ RESULTS_DIR = Path("results")
 
 # Config keys that may differ when resuming a run (they describe the process, not the experiment).
 VOLATILE_CONFIG_KEYS = frozenset({"created_at", "git_commit", "git_dirty"})
+# May change on resume, but only upward: the runner refuses fewer repeats and records the growth
+# in `repeats_history`. More repeats of the same config are more of the same experiment.
+GROWABLE_CONFIG_KEYS = frozenset({"repeats", "langfuse_runs", "repeats_history"})
 
 
 class RetrievedDoc(BaseModel):
@@ -47,6 +50,9 @@ class AnswerRecord(BaseModel):
     load_ms: list[float | None] = []
     truncation_risk: bool
     trace_id: str | None
+    # When the answer was generated; repeats added by a later `generate --resume` show their own
+    # dates. None in files written before it was recorded.
+    generated_at: datetime | None = None
 
     @property
     def masked(self) -> bool:
@@ -56,7 +62,8 @@ class AnswerRecord(BaseModel):
     @classmethod
     def from_result(cls, result: AnswerResult, *, item_id: str, repeat: int, category: str,
                     user: str, question: str, as_of: date,
-                    access_by_id: dict[str, Access]) -> "AnswerRecord":
+                    access_by_id: dict[str, Access],
+                    generated_at: datetime | None = None) -> "AnswerRecord":
         return cls(
             item_id=item_id, repeat=repeat, category=category, user=user, question=question,
             as_of=as_of, answer=result.answer, raw_outputs=result.raw_outputs,
@@ -65,7 +72,7 @@ class AnswerRecord(BaseModel):
             invalid_outputs=result.invalid_outputs, prompt_tokens=result.prompt_tokens,
             durations_ms=result.durations_ms, prompt_eval_ms=result.prompt_eval_ms,
             eval_ms=result.eval_ms, load_ms=result.load_ms, truncation_risk=result.truncation_risk,
-            trace_id=result.trace_id,
+            trace_id=result.trace_id, generated_at=generated_at,
         )
 
 
@@ -220,4 +227,5 @@ def load(path: Path) -> RunResults:
 
 
 def stable_config(config: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in config.items() if k not in VOLATILE_CONFIG_KEYS}
+    return {k: v for k, v in config.items()
+            if k not in VOLATILE_CONFIG_KEYS | GROWABLE_CONFIG_KEYS}

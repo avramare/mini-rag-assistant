@@ -33,6 +33,10 @@ def finished(run: RunResults, judge: str | None = None) -> tuple[str, Evaluation
     if evaluation.finished_at is None:
         raise ValueError(f"evaluation by judge {key} is unfinished ({len(evaluation.answers)} "
                          f"of {len(run.answers)} answers); finish it with `evaluate --resume`")
+    if len(evaluation.answers) < len(run.answers):  # repeats added after it finished
+        raise ValueError(f"evaluation by judge {key} covers {len(evaluation.answers)} of "
+                         f"{len(run.answers)} answers; grade the added repeats with "
+                         "`evaluate --resume`")
     return key, evaluation
 
 

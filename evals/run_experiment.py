@@ -116,6 +116,9 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
         run = load(path)
         if stable_config(run.config) != stable_config(config):
             raise RunError(f"{path} was generated with a different config; not resuming")
+        grow_repeats(run, config["repeats"], log)
+        save(run, path)
+        config = run.config
     else:
         run = RunResults(config=config)
 
@@ -133,7 +136,8 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
                                                  dataset_item_id=item.id)
             record = AnswerRecord.from_result(
                 result, item_id=item.id, repeat=repeat, category=item.category, user=item.user,
-                question=item.question, as_of=as_of, access_by_id=access_by_id)
+                question=item.question, as_of=as_of, access_by_id=access_by_id,
+                generated_at=datetime.now(UTC))
             run.answers.append(record)
             save(run, path)  # after every answer: a crash loses at most the current one
             if record.trace_id:
@@ -146,6 +150,21 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
             log(f"[{len(run.answers)}/{total}] {item.id} r{repeat} {status} "
                 f"({time.perf_counter() - t0:.1f}s)")
     return run
+
+
+def grow_repeats(run: RunResults, repeats: int, log: Log) -> None:
+    """Repeats may only grow: more repeats of the same config add answers, fewer would leave
+    stored ones outside the run. `repeats` is not frozen, so the growth is recorded instead."""
+    stored = run.config["repeats"]
+    if repeats < stored:
+        raise RunError(f"repeats can only grow: the run has {stored}, asked for {repeats}")
+    if repeats == stored:
+        return
+    run.config["repeats"] = repeats
+    run.config["langfuse_runs"] = run_names(run.config["name"], repeats)
+    run.config.setdefault("repeats_history", []).append(
+        {"from": stored, "to": repeats, "at": datetime.now(UTC).isoformat(timespec="seconds")})
+    log(f"repeats {stored} -> {repeats}: adding the missing repeats")
 
 
 def link_metadata(config: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +323,8 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
 
     --resume means "continue or start, never throw away", so a night script can always pass it:
     nothing stored -> start; resumable -> continue; finished by the same judge and facts -> return
-    it as is (the caller does nothing); anything else would be replaced -> refuse."""
+    it as is (the caller does nothing), or reopen it when repeats were added since; anything else
+    would be replaced -> refuse."""
     old = run.evaluations.pop(key, None)  # re-inserted below: the one written last is latest
     unfinished = old is not None and old.finished_at is None
     same = old is not None and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
@@ -316,8 +336,13 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
                            "judge model to resume, and the stored one would be replaced; run "
                            "evaluate without --resume")
         if old is not None:
-            state = ("already finished" if not unfinished else
-                     f"resuming: {len(old.answers)} of {len(run.answers)} answers done")
+            if not unfinished and len(old.answers) < len(run.answers):
+                # Repeats were added after it finished: grade the new answers, keep the old.
+                old.finished_at = None
+                state = f"extending: {len(run.answers) - len(old.answers)} new answers"
+            else:
+                state = ("already finished" if not unfinished else
+                         f"resuming: {len(old.answers)} of {len(run.answers)} answers done")
             log(f"judge {key} {state}")
             run.evaluations[key] = old
             return old
