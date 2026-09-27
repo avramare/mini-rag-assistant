@@ -1,4 +1,6 @@
 import json
+from collections import Counter
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -21,12 +23,14 @@ from evals.run_experiment import (
     judge_client,
     link_metadata,
     rejudge,
+    republish,
 )
 from evals.stats import report
 from mini_rag.assistant import Assistant
 from mini_rag.documents import load_documents
 from mini_rag.llm import FakeEmbedder, FakeLLM, LLMTimeoutError
 from mini_rag.retrieval import Retriever
+from mini_rag.tracing import NoopTracer, _NoopAnswerTrace
 from mini_rag.users import User
 from tests.helpers import dataset_item, write_dataset, write_doc
 
@@ -62,9 +66,9 @@ class Env:
         self.dataset = load_dataset(self.tmp_path / "d.jsonl", set(self.users))
         return self.dataset
 
-    def assistant_for(self, llm: FakeLLM, k: int = 3):
+    def assistant_for(self, llm: FakeLLM, k: int = 3, tracer=None):
         return lambda as_of: Assistant(self.retriever, llm, k=k, today=lambda: as_of,
-                                       num_ctx=4096)
+                                       num_ctx=4096, tracer=tracer)
 
     def config(self, llm: FakeLLM, k: int = 3, run_filter: dict | None = None) -> dict:
         dataset = filter_dataset(self.dataset, run_filter)
@@ -73,20 +77,21 @@ class Env:
                             run_filter)
 
     def generate(self, *responses: str, resume: bool = False, k: int = 3,
-                 run_filter: dict | None = None):
+                 run_filter: dict | None = None, publisher=None, tracer=None):
         llm = FakeLLM(responses)
-        run = generate(filter_dataset(self.dataset, run_filter), self.assistant_for(llm, k),
+        assistant_for = self.assistant_for(llm, k, tracer)
+        run = generate(filter_dataset(self.dataset, run_filter), assistant_for,
                        self.users, {d.id: d.access for d in self.docs},
-                       self.config(llm, k, run_filter), self.path, NoopPublisher(),
-                       resume=resume, log=lambda _: None)
+                       self.config(llm, k, run_filter), self.path,
+                       publisher or NoopPublisher(), resume=resume, log=lambda _: None)
         return run, llm
 
     def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None,
-                 resume: bool = False):
+                 resume: bool = False, publisher=None):
         corpus = Corpus({d.id: d for d in load_documents(self.docs_dir)}, self.users)
         return evaluate(self.path, self.dataset, corpus, judge,
-                        judge_info or (JUDGE_V1 if judge else None), NoopPublisher(),
-                        resume=resume, log=lambda _: None)
+                        judge_info or (JUDGE_V1 if judge else None),
+                        publisher or NoopPublisher(), resume=resume, log=lambda _: None)
 
 
 @pytest.fixture
@@ -416,3 +421,76 @@ def test_rejudge_needs_a_finished_evaluation_to_compare_with(env: Env):
 
     with pytest.raises(RunError, match="run evaluate first"):
         rejudge_env(env, FakeLLM([JUDGE_OK] * 2), samples=1)
+
+
+class TracedIds(NoopTracer):
+    """Like NoopTracer, but every answer gets a trace id, so the runner links and scores it."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    @contextmanager
+    def answer_trace(self, question, user, run_config, *, dataset_item_id=None):
+        self.count += 1
+        trace = _NoopAnswerTrace()
+        trace.trace_id = f"{self.count:032x}"
+        yield trace
+
+
+class LangfuseDown:
+    """Every call fails like an unreachable Langfuse; `up` turns it back on and records."""
+
+    def __init__(self) -> None:
+        self.up = False
+        self.links: list[tuple[str, str]] = []
+        self.scores: list[tuple[str, str]] = []
+
+    def _check(self) -> None:
+        if not self.up:
+            raise ConnectionError("503 Service Unavailable")
+
+    def upload_dataset(self, dataset) -> None:
+        self._check()
+
+    def link(self, dataset, item, run_name, trace_id, metadata) -> None:
+        self._check()
+        self.links.append((item.id, run_name))
+
+    def score(self, trace_id, name, value, comment, score_id, metadata) -> None:
+        self._check()
+        self.scores.append((trace_id, name))
+
+    def flush(self) -> None:
+        self._check()
+
+
+def test_langfuse_outage_never_fails_the_run_and_publish_resends_what_was_missed(env: Env):
+    down = LangfuseDown()
+
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION, publisher=down, tracer=TracedIds())
+    run = env.evaluate(FakeLLM([JUDGE_OK] * 4), publisher=down)
+
+    assert len(run.answers) == 4 and run.evaluation()[1].finished_at is not None
+    saved = load(env.path)
+    kinds = Counter(f.kind for f in saved.publish_failures)
+    # 1 upload + 4 links + per answer 6 applicable scores (5 evaluators with judge, item_pass)
+    assert kinds["dataset"] == 1 and kinds["link"] == 4 and kinds["score"] > 0
+    assert "Langfuse NOT sent: dataset upload 1  links 4" in report(saved)
+
+    down.up = True
+    republished = republish(env.path, env.dataset, down, log=lambda _: None)
+
+    assert sorted(down.links) == [("hol", "run-r1"), ("hol", "run-r2"),
+                                  ("orion", "run-r1"), ("orion", "run-r2")]
+    assert len(down.scores) == kinds["score"]  # every score, once
+    assert republished.publish_failures == [] and load(env.path).publish_failures == []
+    assert "Langfuse: no send failures recorded" in report(load(env.path))
+
+
+def test_publish_keeps_what_failed_again_for_the_next_attempt(env: Env):
+    down = LangfuseDown()
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION, publisher=down, tracer=TracedIds())
+
+    republish(env.path, env.dataset, down, log=lambda _: None)  # still down
+
+    assert Counter(f.kind for f in load(env.path).publish_failures) == {"dataset": 1, "link": 4}

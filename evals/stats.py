@@ -140,6 +140,16 @@ def time_split(label: str, prompt_ms: list[float | None], reply_ms: list[float |
     return lines
 
 
+def publish_line(run: RunResults) -> str:
+    failed = Counter(f.kind for f in run.publish_failures)
+    if not failed:
+        return ("Langfuse: no send failures recorded (scores are queued by the SDK; a delivery "
+                "error after queueing is only in its log)")
+    return (f"Langfuse NOT sent: dataset upload {failed['dataset']}  links {failed['link']}  "
+            f"scores {failed['score']}  -> re-send: uv run python -m evals.run_experiment "
+            f"publish --name {run.config['name']}")
+
+
 def filter_label(run_filter: dict) -> str:
     return "  ".join(f"{k} {','.join(v)}" for k, v in run_filter.items() if v)
 
@@ -214,6 +224,7 @@ def report(run: RunResults, judge: str | None = None) -> str:
         f"truncation_risk {sum(a.truncation_risk for a in answers)}",
         f"generation duration p50 {p50 / 1000:.1f}s  p95 {p95 / 1000:.1f}s  "
         f"({len(durations)} calls, linear interpolation)",
+        publish_line(run),
         *time_split("generation", [x for a in answers for x in a.prompt_eval_ms],
                     [x for a in answers for x in a.eval_ms],
                     [x for a in answers for x in a.load_ms]),

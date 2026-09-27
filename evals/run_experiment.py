@@ -11,6 +11,7 @@ Usage:
         [--items id1,id2] [--category c1,c2]    # filtered dev run; not comparable with full runs
     uv run python -m evals.run_experiment evaluate --name <run> [--no-judge] [--resume]
     uv run python -m evals.run_experiment rejudge --name <run> [--repeat 1] --samples 3 [--resume]
+    uv run python -m evals.run_experiment publish --name <run>   # re-send what Langfuse missed
     uv run python -m evals.run_experiment freeze --dataset P --out evals/frozen/<name>.json
     # --frozen <file> on generate/evaluate: refuse to run when anything differs from the file
 """
@@ -42,7 +43,13 @@ from evals.frozen import (
     write_frozen,
 )
 from evals.judge import JUDGE_NUM_PREDICT, JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
-from evals.publish import LangfusePublisher, NoopPublisher, Publisher, publish_scores
+from evals.publish import (
+    FailSafePublisher,
+    LangfusePublisher,
+    NoopPublisher,
+    Publisher,
+    publish_scores,
+)
 from evals.results import (
     AnswerEvaluation,
     AnswerRecord,
@@ -112,7 +119,8 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
     else:
         run = RunResults(config=config)
 
-    publisher.upload_dataset(dataset)
+    safe = FailSafePublisher(publisher, run.publish_failures.append, log)
+    safe.upload_dataset(dataset)
     repeats = config["repeats"]
     total, done = len(dataset.items) * repeats, run.done()
     for repeat, run_name in enumerate(run_names(config["name"], repeats), 1):
@@ -129,7 +137,11 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
             run.answers.append(record)
             save(run, path)  # after every answer: a crash loses at most the current one
             if record.trace_id:
-                publisher.link(dataset, item, run_name, record.trace_id, link_metadata(config))
+                failures = len(run.publish_failures)
+                safe.link(dataset, item, run_name, record.trace_id, link_metadata(config),
+                          repeat=repeat)
+                if len(run.publish_failures) > failures:
+                    save(run, path)  # the failure is recorded, so `publish` can re-send it
             status = record.error or record.refusal_reason or "answered"
             log(f"[{len(run.answers)}/{total}] {item.id} r{repeat} {status} "
                 f"({time.perf_counter() - t0:.1f}s)")
@@ -189,10 +201,46 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
     save(run, path)  # local results first: a Langfuse outage must not lose the grading
     # All answers, also those graded before a resume: score ids are deterministic, so a score
     # that was already sent is overwritten with the same value.
-    by_answer = {(ev.item_id, ev.repeat): ev for ev in evaluation.answers}
+    send_scores(run, key, FailSafePublisher(publisher, run.publish_failures.append, log))
+    save(run, path)  # with any Langfuse failures recorded
+    return run
+
+
+def send_scores(run: RunResults, key: str, publisher: Publisher) -> None:
+    by_answer = {(ev.item_id, ev.repeat): ev for ev in run.evaluations[key].answers}
     for record in run.answers:
         ev = by_answer[(record.item_id, record.repeat)]
         publish_scores(publisher, record, ev.results, ev.passed, key)
+
+
+def republish(path: Path, dataset: Dataset, publisher: Publisher,
+              log: Log = print) -> RunResults:
+    """Re-send what a Langfuse outage kept from arriving: the dataset upload and the links that
+    failed, and ALL scores of every finished evaluation (queued scores can fail after queueing,
+    unseen; deterministic ids make a re-send an overwrite). Failures of this attempt replace the
+    recorded ones."""
+    run = load(path)
+    dataset = filter_dataset(dataset, run.config.get("filter"))
+    if dataset.generation_key() != run.config["dataset"]["generation_key"]:
+        raise RunError("dataset questions/users/dates changed since generation")
+    old, run.publish_failures = run.publish_failures, []
+    safe = FailSafePublisher(publisher, run.publish_failures.append, log)
+    if any(f.kind == "dataset" for f in old):
+        safe.upload_dataset(dataset)
+    items = {i.id: i for i in dataset.items}
+    links = [f for f in old if f.kind == "link"]
+    for f in links:
+        safe.link(dataset, items[f.item_id], f.run_name, f.trace_id, link_metadata(run.config),
+                  repeat=f.repeat)
+    finished_keys = [k for k, ev in run.evaluations.items() if ev.finished_at is not None]
+    for key in finished_keys:
+        send_scores(run, key, safe)
+    safe.flush()
+    save(run, path)
+    untraced = sum(a.trace_id is None for a in run.answers)
+    log(f"re-sent {len(links)} link(s) and the scores of {len(finished_keys)} evaluation(s); "
+        f"failed again: {len(run.publish_failures)}; answers without a trace (nothing to "
+        f"attach to): {untraced}")
     return run
 
 
@@ -352,6 +400,8 @@ def main() -> int:
     rj.add_argument("--samples", type=int, required=True)
     rj.add_argument("--resume", action="store_true")
     rj.add_argument("--frozen", type=Path)
+    pb = sub.add_parser("publish")
+    pb.add_argument("--name", required=True)
     fr = sub.add_parser("freeze")
     fr.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     fr.add_argument("--out", type=Path, required=True)
@@ -405,9 +455,18 @@ def main() -> int:
                 config["frozen"] = apply_frozen(args.frozen, live)
             generate(dataset, assistant_for, users, {d.id: d.access for d in docs}, config,
                      path, publisher, resume=args.resume)
-            tracer.flush()
+            try:
+                tracer.flush()
+            except Exception as exc:  # traces are sent in the background; never lose the run
+                print(f"[warn] Langfuse trace flush failed ({exc}); answers are saved locally")
             client.unload(s.gen_model)
             print(f"unloaded {s.gen_model}; loaded now: {client.loaded_models()}")
+        elif args.command == "publish":
+            if langfuse is None:
+                raise RunError("no Langfuse keys configured; nothing to publish to")
+            run = load(path)
+            dataset = load_dataset(Path(run.config["dataset"]["path"]), set(users))
+            republish(path, dataset, publisher)
         else:
             run = load(path)
             dataset = load_dataset(Path(run.config["dataset"]["path"]), set(users))
@@ -440,7 +499,7 @@ def main() -> int:
         print(f"[fail] {exc}")
         return 1
     finally:
-        publisher.flush()
+        FailSafePublisher(publisher, lambda _: None).flush()  # a failed flush only warns
     return 0
 
 

@@ -5,7 +5,7 @@ Local only (gitignored): answers to lead questions contain restricted text, like
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -137,6 +137,20 @@ class JudgeSample(BaseModel):
     answers: list[SampledJudgement]
 
 
+class PublishFailure(BaseModel):
+    """A Langfuse call that failed; the run went on (local results are the source of truth).
+    `run_experiment publish` re-sends what can be re-sent."""
+
+    kind: Literal["dataset", "link", "score"]
+    error: str
+    at: datetime
+    item_id: str | None = None
+    repeat: int | None = None
+    run_name: str | None = None  # the Langfuse dataset run of a link
+    trace_id: str | None = None
+    score: str | None = None  # score name
+
+
 NO_JUDGE = "no-judge"
 
 
@@ -158,6 +172,7 @@ class RunResults(BaseModel):
     evaluations: dict[str, Evaluation] = {}
     # evaluation_key -> re-samples of that judge (`run_experiment rejudge`); local only.
     judge_samples: dict[str, list[JudgeSample]] = {}
+    publish_failures: list[PublishFailure] = []
 
     @model_validator(mode="before")
     @classmethod

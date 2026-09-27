@@ -10,10 +10,12 @@ evaluator comment for an answer whose context held a restricted doc.
 """
 
 import hashlib
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from evals.dataset import Dataset, DatasetItem
-from evals.results import AnswerRecord, EvalResult
+from evals.results import AnswerRecord, EvalResult, PublishFailure
 from mini_rag.tracing import mask_text
 
 if TYPE_CHECKING:
@@ -94,6 +96,60 @@ class LangfusePublisher:
 
     def flush(self) -> None:
         self._client.flush()
+
+
+def _error(exc: Exception) -> str:
+    # Type and message only, cut short: enough to see "503" or "timeout" in the report.
+    return f"{type(exc).__name__}: {exc}"[:200]
+
+
+class FailSafePublisher:
+    """Wraps a publisher so that a Langfuse error never stops a run: a night of answers must not
+    be lost to a 503. Each failure is logged and handed to `on_failure` (the runner stores it in
+    the results file); `run_experiment publish` re-sends later.
+
+    Scores are only queued here: the SDK sends them in the background, and a delivery error after
+    queueing shows up in the SDK's log only. That is why `publish` re-sends ALL scores (their ids
+    are deterministic, so a re-send overwrites instead of duplicating)."""
+
+    def __init__(self, inner: Publisher, on_failure: Callable[[PublishFailure], None],
+                 log: Callable[[str], None] = print) -> None:
+        self._inner = inner
+        self._on_failure = on_failure
+        self._log = log
+
+    def _failed(self, exc: Exception, **fields: Any) -> None:
+        failure = PublishFailure(error=_error(exc), at=datetime.now(UTC), **fields)
+        self._log(f"[warn] Langfuse {failure.kind} not sent ({failure.error}); run continues")
+        self._on_failure(failure)
+
+    def upload_dataset(self, dataset: Dataset) -> None:
+        try:
+            self._inner.upload_dataset(dataset)
+        except Exception as exc:  # any Langfuse or network error, see the class doc
+            self._failed(exc, kind="dataset")
+
+    def link(self, dataset: Dataset, item: DatasetItem, run_name: str, trace_id: str,
+             metadata: dict[str, Any], *, repeat: int | None = None) -> None:
+        try:
+            self._inner.link(dataset, item, run_name, trace_id, metadata)
+        except Exception as exc:
+            self._failed(exc, kind="link", item_id=item.id, repeat=repeat, run_name=run_name,
+                         trace_id=trace_id)
+
+    def score(self, trace_id: str, name: str, value: float, comment: str, score_id: str,
+              metadata: dict[str, str] | None) -> None:
+        try:
+            self._inner.score(trace_id, name, value, comment, score_id, metadata)
+        except Exception as exc:
+            self._failed(exc, kind="score", trace_id=trace_id, score=name)
+
+    def flush(self) -> None:
+        try:
+            self._inner.flush()
+        except Exception as exc:
+            self._log(f"[warn] Langfuse flush failed ({_error(exc)}); queued data may be lost, "
+                      "re-send with `run_experiment publish`")
 
 
 # Scores whose value depends on the judge; the others depend only on the answer and the facts.
