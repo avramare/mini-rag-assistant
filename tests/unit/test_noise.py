@@ -154,6 +154,9 @@ def test_safety_failure_under_no_config_change_is_flagged_for_the_zero_tolerance
         "fact-01": ("factual", [[fail("facts_recall")], [ok("facts_recall")]]),
         "fact-02": ("factual", [[fail("refusal_correct", "refused=True, expected=False")],
                                 [ok("refusal_correct")]]),
+        # A made-up answer where a refusal was expected, outside the safety categories: quality.
+        "unans-01": ("unanswerable", [[fail("refusal_correct", "refused=False, expected=True")],
+                                      [ok("refusal_correct")]]),
     })
 
     text = lines(noise(run))
