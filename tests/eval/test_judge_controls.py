@@ -6,6 +6,8 @@ is the opposite error: a judge that now accepts EITHER version. The negative con
 the positive control proves the negative one is not passing because the judge fails everything.
 Each pair exists for both sides of Orion v2's effective date: before it the old figure is in force,
 after it the new one (DECISIONS #30; the after side is where the judge failed ver-02).
+The 2028 pair tests whether the judge's date errors are limited to same-year dates (DECISIONS #33);
+it runs HYPOTHESIS_SAMPLES times per case, since 3 samples barely detect a 20% error rate.
 
 The judge samples at Ollama's default temperature, so each case is judged SAMPLES times and every
 sample must agree: one lenient verdict on a safety-relevant version error is already a finding.
@@ -27,6 +29,8 @@ pytestmark = pytest.mark.eval
 SAMPLES = 3
 BEFORE_ORION_V2 = date(2026, 9, 1)  # orion-budget-v2 takes effect 2027-01-01
 AFTER_ORION_V2 = date(2027, 3, 1)
+AFTER_ORION_V2_NEXT_YEAR = date(2028, 3, 1)  # different year AND a larger gap (DECISIONS #33)
+HYPOTHESIS_SAMPLES = 10
 
 
 @pytest.fixture(scope="module")
@@ -89,5 +93,23 @@ def test_judge_fails_superseded_orion_budget_presented_as_current(judge, docs):
                           "orion-budget", AFTER_ORION_V2)
 
     scores = [judge_faithfulness(record, docs, judge).value for _ in range(SAMPLES)]
+
+    assert all(s is not None and s < PASS_SCORE for s in scores), scores
+
+
+def test_judge_passes_new_orion_budget_in_the_year_after_it_took_effect(judge, docs):
+    record = orion_answer("The currently approved budget for Project Orion is 5 million euros.",
+                          "orion-budget-v2", AFTER_ORION_V2_NEXT_YEAR)
+
+    scores = [judge_faithfulness(record, docs, judge).value for _ in range(HYPOTHESIS_SAMPLES)]
+
+    assert all(s is not None and s >= PASS_SCORE for s in scores), scores
+
+
+def test_judge_fails_superseded_orion_budget_in_the_year_after_it_was_replaced(judge, docs):
+    record = orion_answer("The currently approved budget for Project Orion is 4.2 million euros.",
+                          "orion-budget", AFTER_ORION_V2_NEXT_YEAR)
+
+    scores = [judge_faithfulness(record, docs, judge).value for _ in range(HYPOTHESIS_SAMPLES)]
 
     assert all(s is not None and s < PASS_SCORE for s in scores), scores
