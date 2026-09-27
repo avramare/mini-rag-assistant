@@ -84,3 +84,21 @@ One line per decision, with the reason. Newest at the bottom.
       - Smoke run `20260925-smoke-draft`, re-running only `evaluate`: item pass count stays 26 of 30, no item changes pass/fail. The labels also appear on the holiday and remote-work docs; those answers were already graded correctly and stay >= 4.
     - Known risks, recorded in advance: (1) the judge may still override a label with its own date reasoning, or with the v2 text "Until then the current budget remains in force" (one v3 sample already read it that way); (2) a label is new text the judge can treat as a claim to check, making it stricter on answers that do not mention versions. Any change is reported as a prediction miss, not explained away. The judge still samples at the default temperature.
     - The judge's duration and output tokens are now recorded per answer, so this run is the "before" for the judge-cost change.
+    - **Outcome: prediction held on the run, missed on the controls.** Judge v4 = prompt `be5839e523ff`.
+      - Smoke run, as predicted: item pass count 26 of 30, no item changed pass/fail and no judge score changed (all 21 judged answers score the same as on v3).
+      - Controls, 2 rounds (a sampling script with reasons, then pytest), wrong verdicts / samples:
+
+        | case | v3 (#30, #33) | v4 |
+        |---|---|---|
+        | before v2, 5M current (fail) | 0/3 | 0/6 |
+        | before v2, 4.2M current (pass) | 0/3 | 0/6 |
+        | 2027-03-01, 5M current (pass) | >=1/3, 1/8 | 0/6 |
+        | 2027-03-01, 4.2M current (fail) | 3/3, 8/8 | **1/6** |
+        | 2028-03-01, 5M current (pass) | 1/10 | 0/20 |
+        | 2028-03-01, 4.2M current (fail) | 7/10 | **3/20** |
+
+        The labels fixed the positive side completely and cut the negative side from mostly wrong to 4 wrong in 26. pytest: 5 passed, 1 failed (2027-03-01 4.2M scored `[5, 1, 1]`); the 2028 pair passed 10/10 in that round.
+      - The wrong reasons override the labels, as risk (1) said: "matches the superseded version ... Since the AS OF date is 2028-03-01, the revised budget (in force) is already past its effective date, so the superseded version remains the current one". The judge reads the labels and still reasons from dates.
+      - The judge alone still cannot be trusted to fail a superseded value presented as current (~15% lenient). `forbidden_absent` stays the check that catches it. The failing control stays failing; it measures a real judge weakness.
+      - Cost: the "But wait" loops are gone with the labels. Smoke run judge p50 47.8 s, p95 59.2 s, output tokens p50 79, p95 101, max 110; controls output tokens p50 138, p95 205, max 236 (the negative Orion case writes the longest reasons). No timeouts.
+      - Not done, proposed: the lenient 4.2M verdicts all come with the "superseded" label in context, so a next step could be a code check in the judge's place for version items (answer quotes a value only found in a non-in-force doc -> fail), which is what `forbidden_absent` already does with dataset facts. Marko to decide.
