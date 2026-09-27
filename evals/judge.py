@@ -22,8 +22,9 @@ from mini_rag.documents import Document
 from mini_rag.llm import LLMClient, LLMTimeoutError
 
 PASS_SCORE = 4
-# Cap on the judge's output tokens, part of the judge version (evaluation_key). None = no cap.
-JUDGE_NUM_PREDICT: int | None = None
+# Cap on the judge's output tokens, part of the judge version (evaluation_key). Measured max with
+# the 3-sentence rule was 195 tokens on the controls; 256 is that plus ~30% (DECISIONS #35).
+JUDGE_NUM_PREDICT: int | None = 256
 
 JUDGE_SYSTEM = """You grade whether an ANSWER is faithful to the CONTEXT documents.
 Faithful means every factual claim in the answer is stated in, or follows directly from, the
@@ -46,7 +47,10 @@ Score 1-5:
 2 - the main claim is not supported by the context, or is only partly supported.
 1 - the answer contradicts the context or is invented.
 
-Reply with JSON only: {"reason": "<one or two sentences>", "score": <1-5>}"""
+The reason is at most 3 sentences: name the claim that decides the score and the document that
+supports or contradicts it. Do not restate the documents or reconsider your conclusion.
+
+Reply with JSON only: {"reason": "<at most 3 sentences>", "score": <1-5>}"""
 
 JUDGE_PROMPT_SHA256 = hashlib.sha256(JUDGE_SYSTEM.encode()).hexdigest()
 RETRY_NOTE = "\n\nYour previous reply was not valid JSON matching the schema. Reply again."
