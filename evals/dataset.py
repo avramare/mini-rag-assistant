@@ -108,6 +108,25 @@ class Dataset(BaseModel):
         return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
 
 
+def filter_dataset(dataset: Dataset, run_filter: dict[str, list[str] | None] | None) -> Dataset:
+    """Items matching every given filter (`items`: ids, `categories`), for quick dev runs.
+    An unknown id or category, or an empty result, is an error: a typo must not silently turn
+    into a run over nothing. `sha256` stays that of the whole file, `generation_key` covers only
+    the kept items; the run config records the filter itself."""
+    if run_filter is None:
+        return dataset
+    ids, categories = run_filter.get("items"), run_filter.get("categories")
+    unknown = sorted(set(ids or []) - {i.id for i in dataset.items})
+    unknown += sorted(set(categories or []) - {i.category for i in dataset.items})
+    if unknown:
+        raise DatasetError(f"{dataset.path.name}: filter names unknown items/categories {unknown}")
+    items = [i for i in dataset.items
+             if (ids is None or i.id in ids) and (categories is None or i.category in categories)]
+    if not items:
+        raise DatasetError(f"{dataset.path.name}: filter {run_filter} matches no items")
+    return dataset.model_copy(update={"items": items})
+
+
 def load_dataset(path: Path, known_users: set[str]) -> Dataset:
     raw = path.read_bytes()
     lines = [(n, line) for n, line in enumerate(raw.decode("utf-8").splitlines(), 1)

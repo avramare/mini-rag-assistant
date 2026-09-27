@@ -172,6 +172,15 @@ def test_compare_refuses_runs_graded_against_different_facts():
         compare(base, candidate)
 
 
+def test_compare_refuses_a_filtered_dev_run_against_a_full_run():
+    base = make_run(PASSES, CATEGORIES)
+    candidate = make_run(PASSES, CATEGORIES)
+    candidate.config["filter"] = {"items": None, "categories": ["versioning"]}
+
+    with pytest.raises(NotComparableError, match="full run vs categories versioning"):
+        compare(base, candidate)
+
+
 def test_compare_names_the_config_change_and_per_category_delta():
     base = make_run(PASSES, CATEGORIES)
     candidate = make_run(PASSES | {"c": [True, True]}, CATEGORIES)

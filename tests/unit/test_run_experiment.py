@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from evals.dataset import Dataset, load_dataset
+from evals.dataset import Dataset, DatasetError, filter_dataset, load_dataset
 from evals.evaluators import Corpus
 from evals.publish import NoopPublisher
 from evals.results import load
-from evals.run_experiment import RunError, build_config, evaluate, generate
+from evals.run_experiment import RunError, build_config, evaluate, generate, link_metadata
 from evals.stats import report
 from mini_rag.assistant import Assistant
 from mini_rag.documents import load_documents
@@ -53,15 +53,19 @@ class Env:
         return lambda as_of: Assistant(self.retriever, llm, k=k, today=lambda: as_of,
                                        num_ctx=4096)
 
-    def config(self, llm: FakeLLM, k: int = 3) -> dict:
-        return build_config("run", self.dataset, self.assistant_for(llm, k)(self.dataset.as_of),
-                            2, {"fake-llm": None}, {"git_commit": "abc", "git_dirty": False})
+    def config(self, llm: FakeLLM, k: int = 3, run_filter: dict | None = None) -> dict:
+        dataset = filter_dataset(self.dataset, run_filter)
+        return build_config("run", dataset, self.assistant_for(llm, k)(dataset.as_of),
+                            2, {"fake-llm": None}, {"git_commit": "abc", "git_dirty": False},
+                            run_filter)
 
-    def generate(self, *responses: str, resume: bool = False, k: int = 3):
+    def generate(self, *responses: str, resume: bool = False, k: int = 3,
+                 run_filter: dict | None = None):
         llm = FakeLLM(responses)
-        run = generate(self.dataset, self.assistant_for(llm, k), self.users,
-                       {d.id: d.access for d in self.docs}, self.config(llm, k), self.path,
-                       NoopPublisher(), resume=resume, log=lambda _: None)
+        run = generate(filter_dataset(self.dataset, run_filter), self.assistant_for(llm, k),
+                       self.users, {d.id: d.access for d in self.docs},
+                       self.config(llm, k, run_filter), self.path, NoopPublisher(),
+                       resume=resume, log=lambda _: None)
         return run, llm
 
     def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None,
@@ -239,3 +243,39 @@ def test_resume_refuses_a_different_judge_model(env: Env):
 
     with pytest.raises(RunError, match="no unfinished evaluation"):
         env.evaluate(FakeLLM([JUDGE_OK] * 3), JUDGE_V1 | {"digest": "sha256:new"}, resume=True)
+
+
+VERSIONING_ONLY = {"items": None, "categories": ["versioning"]}
+
+
+def test_filtered_run_asks_only_selected_items_and_evaluate_grades_the_same_items(env: Env):
+    run, llm = env.generate(ORION, ORION, run_filter=VERSIONING_ONLY)
+
+    assert [(a.item_id, a.repeat) for a in run.answers] == [("orion", 1), ("orion", 2)]
+    assert len(llm.calls) == 2 and run.config["filter"] == VERSIONING_ONLY
+    # evaluate gets the whole dataset file and re-applies the run's filter; without it the
+    # item hash would not match and "hol" would count as missing answers.
+    evaluated = env.evaluate(FakeLLM([JUDGE_OK] * 2))
+    assert [(ev.item_id, ev.passed) for ev in evaluated.evaluation()[1].answers] == [
+        ("orion", True), ("orion", True)]
+    assert "FILTERED dev run: categories versioning; not comparable" in report(evaluated)
+
+
+@pytest.mark.parametrize("run_filter, reason", [
+    ({"items": ["orion", "orinon"], "categories": None}, "unknown items/categories"),
+    ({"items": None, "categories": ["factul"]}, "unknown items/categories"),
+    ({"items": ["hol"], "categories": ["versioning"]}, "matches no items"),
+])
+def test_filter_typo_or_empty_selection_is_refused_not_run_over_nothing(env: Env, run_filter,
+                                                                       reason):
+    with pytest.raises(DatasetError, match=reason):
+        filter_dataset(env.dataset, run_filter)
+
+
+def test_filtered_run_is_marked_in_langfuse_dataset_run_metadata(env: Env):
+    llm = FakeLLM([])
+
+    full, filtered = env.config(llm), env.config(llm, run_filter=VERSIONING_ONLY)
+
+    assert "filter" not in link_metadata(full)
+    assert link_metadata(filtered) == {**filtered["assistant"], "filter": VERSIONING_ONLY}

@@ -8,6 +8,7 @@ everything but the judge before pass 2), and so the judge can be re-run without 
 
 Usage:
     uv run python -m evals.run_experiment generate --name <run> --repeats 5 [--dataset P] [--resume]
+        [--items id1,id2] [--category c1,c2]    # filtered dev run; not comparable with full runs
     uv run python -m evals.run_experiment evaluate --name <run> [--no-judge] [--resume]
 """
 
@@ -25,6 +26,7 @@ from evals.dataset import (
     DatasetError,
     check_expected_docs,
     check_facts_in_corpus,
+    filter_dataset,
     load_dataset,
 )
 from evals.evaluators import Corpus, answer_passed, run_code_evaluators
@@ -62,7 +64,10 @@ def run_names(name: str, repeats: int) -> list[str]:
 
 
 def build_config(name: str, dataset: Dataset, assistant: Assistant, repeats: int,
-                 model_digests: dict[str, str | None], git: dict[str, Any]) -> dict[str, Any]:
+                 model_digests: dict[str, str | None], git: dict[str, Any],
+                 run_filter: dict[str, list[str] | None] | None = None) -> dict[str, Any]:
+    """`dataset` is already filtered by `run_filter`; the filter is kept so that evaluate can
+    select the same items and compare can refuse a filtered run against a full one."""
     assistant_config = assistant.run_config()
     assistant_config.pop("today")  # per item: dataset as_of, or the item's override
     return {
@@ -76,6 +81,7 @@ def build_config(name: str, dataset: Dataset, assistant: Assistant, repeats: int
                     "langfuse_name": dataset.langfuse_name, "items": len(dataset.items)},
         "assistant": assistant_config,
         "model_digests": model_digests,
+        "filter": run_filter,
         "langfuse_runs": run_names(name, repeats),
     }
 
@@ -110,17 +116,25 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
             run.answers.append(record)
             save(run, path)  # after every answer: a crash loses at most the current one
             if record.trace_id:
-                publisher.link(dataset, item, run_name, record.trace_id, config["assistant"])
+                publisher.link(dataset, item, run_name, record.trace_id, link_metadata(config))
             status = record.error or record.refusal_reason or "answered"
             log(f"[{len(run.answers)}/{total}] {item.id} r{repeat} {status} "
                 f"({time.perf_counter() - t0:.1f}s)")
     return run
 
 
+def link_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    """Dataset-run metadata in Langfuse: a filtered dev run must be recognisable there too."""
+    if config.get("filter") is None:
+        return config["assistant"]
+    return {**config["assistant"], "filter": config["filter"]}
+
+
 def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | None,
              judge_info: dict[str, Any] | None, publisher: Publisher, *, resume: bool = False,
              log: Log = print) -> RunResults:
     run = load(path)
+    dataset = filter_dataset(dataset, run.config.get("filter"))  # the items this run generated
     expected = run.config["dataset"]["generation_key"]
     if dataset.generation_key() != expected:
         raise RunError("dataset questions/users/dates changed since generation; regenerate")
@@ -188,6 +202,10 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
     return run.evaluations[key]
 
 
+def _csv(value: str) -> list[str]:
+    return sorted({v.strip() for v in value.split(",") if v.strip()})
+
+
 def _git_info() -> dict[str, Any]:
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
@@ -214,6 +232,8 @@ def main() -> int:
     gen.add_argument("--repeats", type=int, default=1)
     gen.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     gen.add_argument("--resume", action="store_true")
+    gen.add_argument("--items", type=_csv, help="only these item ids (comma separated)")
+    gen.add_argument("--category", type=_csv, help="only these categories (comma separated)")
     ev = sub.add_parser("evaluate")
     ev.add_argument("--name", required=True)
     ev.add_argument("--no-judge", action="store_true")
@@ -232,6 +252,9 @@ def main() -> int:
             dataset = load_dataset(args.dataset, set(users))
             check_facts_in_corpus(dataset, docs)
             check_expected_docs(dataset, docs, users)
+            run_filter = ({"items": args.items, "categories": args.category}
+                          if args.items or args.category else None)
+            dataset = filter_dataset(dataset, run_filter)
             client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx,
                                   read_timeout=s.ollama_read_timeout_s)
             retriever = Retriever(docs, client, cache_dir=s.cache_dir)
@@ -247,7 +270,7 @@ def main() -> int:
 
             config = build_config(args.name, dataset, assistant_for(dataset.as_of), args.repeats,
                                   client.model_digests([s.gen_model, s.embed_model]),
-                                  _git_info())
+                                  _git_info(), run_filter)
             generate(dataset, assistant_for, users, {d.id: d.access for d in docs}, config,
                      path, publisher, resume=args.resume)
             tracer.flush()

@@ -82,6 +82,10 @@ def judge_cost(evaluation: Evaluation) -> str:
     return line
 
 
+def filter_label(run_filter: dict) -> str:
+    return "  ".join(f"{k} {','.join(v)}" for k, v in run_filter.items() if v)
+
+
 def report(run: RunResults, judge: str | None = None) -> str:
     c, answers = run.config, run.answers
     key, evaluation = finished(run, judge)
@@ -96,6 +100,8 @@ def report(run: RunResults, judge: str | None = None) -> str:
         f"gen {c['assistant']['gen_model']}  embed {c['assistant']['embed_model']}  "
         f"k {c['assistant']['k']}  num_ctx {c['assistant']['num_ctx']}  "
         f"prompt {c['assistant']['system_prompt_sha256'][:12]}",
+        *([f"FILTERED dev run: {filter_label(c['filter'])}; not comparable with full runs"]
+          if c.get("filter") else []),
         f"{judge_label(key, evaluation)}  evaluated {evaluation.evaluated_at:%Y-%m-%d %H:%M} UTC"
         + (f"  (also stored: {', '.join(others)}; pick with --judge)" if others else ""),
         "",
@@ -174,6 +180,12 @@ def check_comparable(a: RunResults, b: RunResults) -> list[str]:
     """Raises when the runs measure different things; returns the config differences that ARE the
     experiment (prompt, model, k, ...), so the reader sees what changed. Uses each run's latest
     evaluation."""
+    if a.config.get("filter") != b.config.get("filter"):
+        # Checked before the item hash so the message says why: a dev subset is not the dataset.
+        label = [filter_label(r.config["filter"]) if r.config.get("filter") else "full run"
+                 for r in (a, b)]
+        raise NotComparableError(f"different item filters: {label[0]} vs {label[1]}; "
+                                 "a filtered dev run covers other items than a full run")
     if a.config["as_of"] != b.config["as_of"]:
         raise NotComparableError(f"different as_of: {a.config['as_of']} vs {b.config['as_of']}; "
                                  "the correct answer to versioning items differs")
