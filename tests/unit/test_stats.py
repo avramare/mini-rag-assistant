@@ -172,12 +172,21 @@ def test_compare_refuses_runs_graded_against_different_facts():
         compare(base, candidate)
 
 
-def test_compare_refuses_a_filtered_dev_run_against_a_full_run():
+VERSIONING = {"items": None, "categories": ["versioning"]}
+ORION_ONLY = {"items": ["orion"], "categories": None}
+
+
+@pytest.mark.parametrize("base_filter, cand_filter, message", [
+    (None, VERSIONING, "full run vs categories versioning"),
+    (VERSIONING, None, "categories versioning vs full run"),
+    (ORION_ONLY, VERSIONING, "items orion vs categories versioning"),
+])
+def test_compare_refuses_runs_over_different_item_filters(base_filter, cand_filter, message):
     base = make_run(PASSES, CATEGORIES)
     candidate = make_run(PASSES, CATEGORIES)
-    candidate.config["filter"] = {"items": None, "categories": ["versioning"]}
+    base.config["filter"], candidate.config["filter"] = base_filter, cand_filter
 
-    with pytest.raises(NotComparableError, match="full run vs categories versioning"):
+    with pytest.raises(NotComparableError, match=message):
         compare(base, candidate)
 
 

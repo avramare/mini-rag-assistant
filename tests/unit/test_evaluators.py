@@ -216,16 +216,28 @@ def test_judge_timeout_twice_is_a_counted_judge_error_not_a_crash(corpus):
     assert len(llm.calls) == 2  # exactly one retry
 
 
-def test_judge_records_its_cost_so_a_prompt_change_can_be_measured(corpus):
+class ScriptedClock:
+    """Stands in for time.perf_counter: each call returns the next scripted reading (seconds)."""
+
+    def __init__(self, *readings: float) -> None:
+        self.readings = list(readings)
+
+    def __call__(self) -> float:
+        return self.readings.pop(0)
+
+
+def test_judge_records_its_cost_including_retries(corpus, monkeypatch):
     # Judge v3 reasons ran long and the 30-answer evaluate took ~50 min (DECISIONS #30); a cost
-    # fix needs a before/after in the results file, not a guess.
-    ok = judge_faithfulness(record(), corpus.docs,
-                            FakeLLM([Generation(judge_reply(5), completion_tokens=42)]))
+    # fix needs a before/after in the results file. A timed-out attempt is cost too.
+    monkeypatch.setattr("evals.judge.time.perf_counter", ScriptedClock(10.0, 13.0))
+    retried = judge_faithfulness(record(), corpus.docs, FakeLLM(
+        [LLMTimeoutError("slow"), Generation(judge_reply(5), completion_tokens=42)]))
+    monkeypatch.setattr("evals.judge.time.perf_counter", ScriptedClock(20.0, 22.0))
     failed = judge_faithfulness(record(), corpus.docs,
                                 FakeLLM([LLMTimeoutError("slow"), LLMTimeoutError("slow")]))
 
-    assert ok.output_tokens == 42 and ok.duration_ms is not None and ok.duration_ms >= 0
-    assert failed.duration_ms is not None and failed.output_tokens is None
+    assert (retried.duration_ms, retried.output_tokens) == (3000.0, 42)
+    assert (failed.duration_ms, failed.output_tokens) == (2000.0, None)
 
 
 def test_judge_reply_cut_off_at_the_output_cap_is_a_counted_failed_attempt(corpus):

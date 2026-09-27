@@ -45,7 +45,7 @@ from evals.results import (
 )
 from mini_rag.assistant import Assistant
 from mini_rag.documents import Access
-from mini_rag.llm import LLMClient
+from mini_rag.llm import LLMClient, OllamaClient
 from mini_rag.retrieval import corpus_hash
 from mini_rag.users import User
 
@@ -202,6 +202,19 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
     return run.evaluations[key]
 
 
+def judge_client(host: str, model: str, embed_model: str, num_ctx: int,
+                 read_timeout: float) -> OllamaClient:
+    return OllamaClient(host, model, embed_model, num_ctx=num_ctx, read_timeout=read_timeout,
+                        num_predict=JUDGE_NUM_PREDICT)
+
+
+def describe_judge(client: OllamaClient, digest: str | None) -> dict[str, Any]:
+    """Recorded with the evaluation and part of its key. Read from the client that will judge,
+    so the recorded cap cannot differ from the one actually sent."""
+    return {"model": client.model, "digest": digest, "prompt_sha256": JUDGE_PROMPT_SHA256,
+            "pass_score": PASS_SCORE, "num_predict": client.num_predict}
+
+
 def _csv(value: str) -> list[str]:
     return sorted({v.strip() for v in value.split(",") if v.strip()})
 
@@ -220,7 +233,6 @@ def _git_info() -> dict[str, Any]:
 def main() -> int:
     from mini_rag.config import Settings
     from mini_rag.documents import load_documents
-    from mini_rag.llm import OllamaClient
     from mini_rag.retrieval import Retriever
     from mini_rag.tracing import LangfuseTracer, NoopTracer, make_langfuse
     from mini_rag.users import load_users
@@ -283,17 +295,14 @@ def main() -> int:
             check_expected_docs(dataset, docs, users)
             judge = judge_info = None
             if not args.no_judge:
-                judge = OllamaClient(s.ollama_host, s.judge_model, s.embed_model,
-                                     num_ctx=s.num_ctx, read_timeout=s.ollama_read_timeout_s,
-                                     num_predict=JUDGE_NUM_PREDICT)
+                judge = judge_client(s.ollama_host, s.judge_model, s.embed_model, s.num_ctx,
+                                     s.ollama_read_timeout_s)
                 for model in judge.loaded_models():
                     if model not in {s.judge_model, f"{s.judge_model}:latest"}:
                         judge.unload(model)  # only the judge stays in memory
                 print(f"loaded before judging: {judge.loaded_models()}")
-                judge_info = {"model": s.judge_model,
-                              "digest": judge.model_digests([s.judge_model])[s.judge_model],
-                              "prompt_sha256": JUDGE_PROMPT_SHA256, "pass_score": PASS_SCORE,
-                              "num_predict": JUDGE_NUM_PREDICT}
+                judge_info = describe_judge(
+                    judge, judge.model_digests([s.judge_model])[s.judge_model])
             evaluate(path, dataset, Corpus({d.id: d for d in docs}, users), judge, judge_info,
                      publisher, resume=args.resume)
             print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")

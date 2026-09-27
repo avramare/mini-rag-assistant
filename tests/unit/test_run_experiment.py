@@ -6,9 +6,18 @@ import pytest
 
 from evals.dataset import Dataset, DatasetError, filter_dataset, load_dataset
 from evals.evaluators import Corpus
+from evals.judge import JUDGE_NUM_PREDICT
 from evals.publish import NoopPublisher
-from evals.results import load
-from evals.run_experiment import RunError, build_config, evaluate, generate, link_metadata
+from evals.results import evaluation_key, load
+from evals.run_experiment import (
+    RunError,
+    build_config,
+    describe_judge,
+    evaluate,
+    generate,
+    judge_client,
+    link_metadata,
+)
 from evals.stats import report
 from mini_rag.assistant import Assistant
 from mini_rag.documents import load_documents
@@ -163,6 +172,16 @@ def test_same_judge_prompt_with_an_output_cap_is_another_judge_version(env: Env)
     assert set(load(env.path).evaluations) == {"111111111111", "111111111111-np200"}
 
 
+def test_judge_that_evaluates_sends_the_cap_its_results_are_stored_under():
+    # A cap recorded in judge_info but not sent would file uncapped grades under a capped key.
+    client = judge_client("http://ollama.test", "judge", "embed", 4096, 60.0)
+
+    info = describe_judge(client, None)
+
+    assert client.num_predict == JUDGE_NUM_PREDICT == info["num_predict"]
+    assert evaluation_key(info).endswith(f"-np{JUDGE_NUM_PREDICT}")
+
+
 def test_evaluate_refuses_a_changed_corpus(env: Env):
     env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
     write_doc(env.docs_dir, "holiday-policy.md", "holiday-policy", "Holiday policy", "public",
@@ -258,17 +277,22 @@ def test_resume_refuses_a_different_judge_model(env: Env):
 VERSIONING_ONLY = {"items": None, "categories": ["versioning"]}
 
 
-def test_filtered_run_asks_only_selected_items_and_evaluate_grades_the_same_items(env: Env):
-    run, llm = env.generate(ORION, ORION, run_filter=VERSIONING_ONLY)
+@pytest.mark.parametrize("run_filter, label", [
+    (VERSIONING_ONLY, "categories versioning"),
+    ({"items": ["orion"], "categories": None}, "items orion"),
+])
+def test_filtered_run_asks_only_selected_items_and_evaluate_grades_the_same_items(
+        env: Env, run_filter, label):
+    run, llm = env.generate(ORION, ORION, run_filter=run_filter)
 
     assert [(a.item_id, a.repeat) for a in run.answers] == [("orion", 1), ("orion", 2)]
-    assert len(llm.calls) == 2 and run.config["filter"] == VERSIONING_ONLY
+    assert len(llm.calls) == 2 and run.config["filter"] == run_filter
     # evaluate gets the whole dataset file and re-applies the run's filter; without it the
     # item hash would not match and "hol" would count as missing answers.
     evaluated = env.evaluate(FakeLLM([JUDGE_OK] * 2))
     assert [(ev.item_id, ev.passed) for ev in evaluated.evaluation()[1].answers] == [
         ("orion", True), ("orion", True)]
-    assert "FILTERED dev run: categories versioning; not comparable" in report(evaluated)
+    assert f"FILTERED dev run: {label}; not comparable" in report(evaluated)
 
 
 @pytest.mark.parametrize("run_filter, reason", [

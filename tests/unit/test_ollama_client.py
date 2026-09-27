@@ -124,6 +124,7 @@ def test_missing_usage_numbers_become_none_not_zero():
     gen = make_client(server).generate("sys", "prompt", ANSWER_SCHEMA)
 
     assert (gen.prompt_tokens, gen.completion_tokens, gen.duration_ms) == (None, None, None)
+    assert gen.truncated is False  # a missing done_reason is no evidence of a cut-off reply
 
 
 def test_model_digest_found_for_tag_listed_with_latest_suffix():
