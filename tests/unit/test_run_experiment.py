@@ -20,6 +20,7 @@ from evals.run_experiment import (
     generate,
     judge_client,
     link_metadata,
+    rejudge,
 )
 from evals.stats import report
 from mini_rag.assistant import Assistant
@@ -348,3 +349,70 @@ def test_frozen_check_refuses_before_anything_runs_when_the_judge_changed(env: E
 
     with pytest.raises(FrozenConfigError, match="judge.prompt_sha256"):
         apply_frozen(tmp_path / "frozen.json", live, tree_status="")
+
+
+def rejudge_env(env: Env, judge: FakeLLM, samples: int, *, resume: bool = False,
+                judge_info: dict = JUDGE_V1):
+    corpus = Corpus({d.id: d for d in load_documents(env.docs_dir)}, env.users)
+    return rejudge(env.path, env.dataset, corpus, judge, judge_info, 1, samples, resume=resume,
+                   log=lambda _: None)
+
+
+def test_rejudge_stores_samples_next_to_the_evaluation_and_never_over_it(env: Env):
+    # Judge noise must be measured on the same answers without touching the grades reports use.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    before = env.evaluate(FakeLLM([JUDGE_OK] * 4)).evaluations
+
+    judge = FakeLLM([JUDGE_BAD, JUDGE_OK, JUDGE_OK, JUDGE_BAD])
+    rejudge_env(env, judge, samples=2)
+
+    saved = load(env.path)
+    assert saved.evaluations == before
+    samples = saved.judge_samples["111111111111"]
+    assert [(s.sample, s.repeat, s.finished_at is not None) for s in samples] == [
+        (1, 1, True), (2, 1, True)]
+    assert [[(a.item_id, a.repeat, a.result.passed) for a in s.answers] for s in samples] == [
+        [("hol", 1, False), ("orion", 1, True)], [("hol", 1, True), ("orion", 1, False)]]
+    assert len(judge.calls) == 4  # repeat 1 only: 2 answers x 2 samples
+
+
+def test_crashed_rejudge_resumes_without_losing_or_repeating_a_judgement(env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_OK] * 4))
+    with pytest.raises(AssertionError, match="ran out"):
+        rejudge_env(env, FakeLLM([JUDGE_OK, JUDGE_BAD, JUDGE_OK]), samples=2)
+
+    judge = FakeLLM([JUDGE_OK, JUDGE_OK, JUDGE_OK])
+    run = rejudge_env(env, judge, samples=3, resume=True)  # also extends 2 -> 3 samples
+
+    samples = run.judge_samples["111111111111"]
+    assert len(judge.calls) == 3  # sample 2's second answer + both of sample 3
+    assert [len({(a.item_id, a.repeat) for a in s.answers}) for s in samples] == [2, 2, 2]
+    assert [len(s.answers) for s in samples] == [2, 2, 2]  # no duplicates
+    assert samples[0].answers[1].result.passed is False  # kept from before the crash
+
+
+def test_rejudge_without_resume_refuses_to_discard_existing_samples(env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_OK] * 4))
+    rejudge_env(env, FakeLLM([JUDGE_OK] * 2), samples=1)
+
+    with pytest.raises(RunError, match="already has 1 sample"):
+        rejudge_env(env, FakeLLM([JUDGE_OK] * 2), samples=1)
+
+
+def test_rejudge_refuses_a_judge_model_other_than_the_one_that_evaluated(env: Env):
+    # Mixing two judge builds would report their difference as judge noise.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_OK] * 4))
+
+    with pytest.raises(RunError, match="samples would mix judges"):
+        rejudge_env(env, FakeLLM([JUDGE_OK] * 2), samples=1,
+                    judge_info=JUDGE_V1 | {"digest": "sha256:new"})
+
+
+def test_rejudge_needs_a_finished_evaluation_to_compare_with(env: Env):
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+
+    with pytest.raises(RunError, match="run evaluate first"):
+        rejudge_env(env, FakeLLM([JUDGE_OK] * 2), samples=1)

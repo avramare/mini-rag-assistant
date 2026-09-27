@@ -10,6 +10,7 @@ Usage:
     uv run python -m evals.run_experiment generate --name <run> --repeats 5 [--dataset P] [--resume]
         [--items id1,id2] [--category c1,c2]    # filtered dev run; not comparable with full runs
     uv run python -m evals.run_experiment evaluate --name <run> [--no-judge] [--resume]
+    uv run python -m evals.run_experiment rejudge --name <run> [--repeat 1] --samples 3 [--resume]
     uv run python -m evals.run_experiment freeze --dataset P --out evals/frozen/<name>.json
     # --frozen <file> on generate/evaluate: refuse to run when anything differs from the file
 """
@@ -46,7 +47,9 @@ from evals.results import (
     AnswerEvaluation,
     AnswerRecord,
     Evaluation,
+    JudgeSample,
     RunResults,
+    SampledJudgement,
     evaluation_key,
     load,
     results_path,
@@ -140,11 +143,10 @@ def link_metadata(config: dict[str, Any]) -> dict[str, Any]:
     return {**config["assistant"], "filter": config["filter"]}
 
 
-def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | None,
-             judge_info: dict[str, Any] | None, publisher: Publisher, *, resume: bool = False,
-             log: Log = print) -> RunResults:
-    run = load(path)
-    dataset = filter_dataset(dataset, run.config.get("filter"))  # the items this run generated
+def check_run_current(run: RunResults, dataset: Dataset, corpus: Corpus) -> Dataset:
+    """The saved answers still belong to this dataset and corpus, and none is missing.
+    Returns the dataset filtered to the items the run generated."""
+    dataset = filter_dataset(dataset, run.config.get("filter"))
     expected = run.config["dataset"]["generation_key"]
     if dataset.generation_key() != expected:
         raise RunError("dataset questions/users/dates changed since generation; regenerate")
@@ -155,6 +157,14 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
     missing = len(dataset.items) * run.config["repeats"] - len(run.answers)
     if missing:
         raise RunError(f"{missing} answers missing; finish with `generate --resume` first")
+    return dataset
+
+
+def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | None,
+             judge_info: dict[str, Any] | None, publisher: Publisher, *, resume: bool = False,
+             log: Log = print) -> RunResults:
+    run = load(path)
+    dataset = check_run_current(run, dataset, corpus)
 
     key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
     evaluation = start_or_resume(run, key, dataset.sha256, judge_info, resume, log)
@@ -183,6 +193,56 @@ def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | No
     for record in run.answers:
         ev = by_answer[(record.item_id, record.repeat)]
         publish_scores(publisher, record, ev.results, ev.passed, key)
+    return run
+
+
+def rejudge(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient,
+            judge_info: dict[str, Any], repeat: int, samples: int, *, resume: bool = False,
+            log: Log = print) -> RunResults:
+    """Judge noise: grade one repeat's saved answers `samples` more times with the judge that
+    made the stored evaluation. Samples are stored next to the evaluation, never over it.
+    --resume continues unfinished samples and adds missing ones; without it, existing samples
+    are refused, so a re-run never throws measured samples away."""
+    run = load(path)
+    check_run_current(run, dataset, corpus)
+    key = evaluation_key(judge_info)
+    if key not in run.evaluations or run.evaluations[key].finished_at is None:
+        raise RunError(f"no finished evaluation by judge {key}; run evaluate first (the "
+                       "samples are compared with it)")
+    if run.evaluations[key].judge != judge_info:
+        raise RunError(f"judge {key} now differs from the one that evaluated this run "
+                       f"({run.evaluations[key].judge} -> {judge_info}); samples would mix judges")
+    records = [r for r in run.answers if r.repeat == repeat]
+    if not records:
+        raise RunError(f"run has no repeat {repeat}")
+    existing = run.judge_samples.setdefault(key, [])
+    if existing and not resume:
+        raise RunError(f"judge {key} already has {len(existing)} sample(s); continue or extend "
+                       "them with --resume")
+    if any(s.repeat != repeat or s.judge != judge_info for s in existing):
+        raise RunError(f"stored samples of judge {key} are of another repeat or judge model; "
+                       "they cannot be extended with these")
+
+    for number in range(1, samples + 1):
+        sample = next((s for s in existing if s.sample == number), None)
+        if sample is None:
+            sample = JudgeSample(sample=number, repeat=repeat, started_at=datetime.now(UTC),
+                                 finished_at=None, judge=judge_info, answers=[])
+            existing.append(sample)
+        if sample.finished_at is not None:
+            log(f"sample {number} already finished")
+            continue
+        done = {(a.item_id, a.repeat) for a in sample.answers}
+        for record in records:
+            if (record.item_id, record.repeat) in done:
+                continue
+            sample.answers.append(SampledJudgement(
+                item_id=record.item_id, repeat=record.repeat,
+                result=judge_faithfulness(record, corpus.docs, judge)))
+            save(run, path)  # after every answer: a crash loses at most the current one
+            log(f"sample {number}/{samples} {record.item_id} r{record.repeat}")
+        sample.finished_at = datetime.now(UTC)
+        save(run, path)
     return run
 
 
@@ -286,6 +346,12 @@ def main() -> int:
     ev.add_argument("--no-judge", action="store_true")
     ev.add_argument("--resume", action="store_true")
     ev.add_argument("--frozen", type=Path)
+    rj = sub.add_parser("rejudge")
+    rj.add_argument("--name", required=True)
+    rj.add_argument("--repeat", type=int, default=1)
+    rj.add_argument("--samples", type=int, required=True)
+    rj.add_argument("--resume", action="store_true")
+    rj.add_argument("--frozen", type=Path)
     fr = sub.add_parser("freeze")
     fr.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     fr.add_argument("--out", type=Path, required=True)
@@ -348,7 +414,7 @@ def main() -> int:
             check_facts_in_corpus(dataset, docs)
             check_expected_docs(dataset, docs, users)
             judge = judge_info = None
-            if not args.no_judge:
+            if not getattr(args, "no_judge", False):
                 judge = judge_client(s.ollama_host, s.judge_model, s.embed_model, s.num_ctx,
                                      s.ollama_read_timeout_s)
                 for model in judge.loaded_models():
@@ -361,9 +427,15 @@ def main() -> int:
                 frozen = apply_frozen(args.frozen, frozen_view(
                     dataset, run.config["assistant"], run.config["model_digests"], judge_info))
                 check_run_frozen(run, frozen)
-            evaluate(path, dataset, Corpus({d.id: d for d in docs}, users), judge, judge_info,
-                     publisher, resume=args.resume)
-            print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")
+            corpus = Corpus({d.id: d for d in docs}, users)
+            if args.command == "rejudge":
+                rejudge(path, dataset, corpus, judge, judge_info, args.repeat, args.samples,
+                        resume=args.resume)
+                print(f"re-judged {path}; noise: uv run python -m evals.stats noise {path}")
+            else:
+                evaluate(path, dataset, corpus, judge, judge_info, publisher,
+                         resume=args.resume)
+                print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")
     except (RunError, DatasetError, FrozenConfigError) as exc:
         print(f"[fail] {exc}")
         return 1

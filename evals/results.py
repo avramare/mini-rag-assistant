@@ -119,6 +119,24 @@ class Evaluation(BaseModel):
         return data
 
 
+class SampledJudgement(BaseModel):
+    item_id: str
+    repeat: int
+    result: EvalResult
+
+
+class JudgeSample(BaseModel):
+    """One extra pass of the same judge over one repeat's saved answers (Phase 4 judge noise).
+    Kept apart from `evaluations`: a sample never replaces the grades reports and compare use."""
+
+    sample: int  # 1..K; the evaluation itself is the sample the report calls 0
+    repeat: int
+    started_at: datetime
+    finished_at: datetime | None
+    judge: dict[str, Any]
+    answers: list[SampledJudgement]
+
+
 NO_JUDGE = "no-judge"
 
 
@@ -138,6 +156,8 @@ class RunResults(BaseModel):
     # evaluation_key -> evaluation, oldest first: the runner moves the one it writes to the end.
     # Order, not `evaluated_at`: two evaluations can share a timestamp (Windows clock ticks ~15 ms).
     evaluations: dict[str, Evaluation] = {}
+    # evaluation_key -> re-samples of that judge (`run_experiment rejudge`); local only.
+    judge_samples: dict[str, list[JudgeSample]] = {}
 
     @model_validator(mode="before")
     @classmethod
