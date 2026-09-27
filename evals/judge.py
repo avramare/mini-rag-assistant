@@ -10,6 +10,7 @@ calibrated against Marko's labels in Phase 6.
 
 import hashlib
 import json
+import time
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -77,21 +78,25 @@ def judge_faithfulness(record: AnswerRecord, docs: dict[str, Document],
         return EvalResult(name="judge_faithfulness", applicable=False)
     prompt = judge_prompt(record, docs)
     errors: list[str] = []  # one entry per failed attempt: "timeout" or "invalid_output"
+    t0 = time.perf_counter()  # wall clock over all attempts: timeouts and retries are cost too
     for _ in range(2):
         note = RETRY_NOTE if errors[-1:] == ["invalid_output"] else ""
         try:
-            text = llm.generate(JUDGE_SYSTEM, prompt + note, JUDGE_SCHEMA).text
+            generation = llm.generate(JUDGE_SYSTEM, prompt + note, JUDGE_SCHEMA)
         except LLMTimeoutError:
             errors.append("timeout")
             continue
         try:
-            reply = JudgeReply.model_validate(json.loads(text))
+            reply = JudgeReply.model_validate(json.loads(generation.text))
         except (json.JSONDecodeError, ValidationError):
             errors.append("invalid_output")
             continue
         retry = f" (after retry: {errors[0]})" if errors else ""
         return EvalResult(name="judge_faithfulness", applicable=True,
                           passed=reply.score >= PASS_SCORE, value=reply.score,
-                          detail=reply.reason + retry, attempt_errors=errors)
+                          detail=reply.reason + retry, attempt_errors=errors,
+                          duration_ms=(time.perf_counter() - t0) * 1000,
+                          output_tokens=generation.completion_tokens)
     return EvalResult(name="judge_faithfulness", applicable=True, passed=False,
-                      detail="judge_error: " + ", ".join(errors), attempt_errors=errors)
+                      detail="judge_error: " + ", ".join(errors), attempt_errors=errors,
+                      duration_ms=(time.perf_counter() - t0) * 1000)

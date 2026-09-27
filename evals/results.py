@@ -78,6 +78,10 @@ class EvalResult(BaseModel):
     # Failed attempts before this result ("timeout", "invalid_output"); the report counts them
     # even when the retry succeeded.
     attempt_errors: list[str] = []
+    # Judge cost: wall clock over all attempts (incl. timeouts), and the tokens of the reply that
+    # was used. None for code evaluators and for results saved before these were recorded.
+    duration_ms: float | None = None
+    output_tokens: int | None = None
 
 
 class AnswerEvaluation(BaseModel):

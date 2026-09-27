@@ -65,6 +65,23 @@ def judge_label(key: str, evaluation: Evaluation) -> str:
     return f"judge {judge['model']} prompt {key}" if judge else "judge none"
 
 
+def judge_cost(evaluation: Evaluation) -> str:
+    """Per judged answer: wall clock over all its attempts, and tokens of the reply used."""
+    judged = [r for ev in evaluation.answers for r in ev.results
+              if r.name == "judge_faithfulness" and r.applicable]
+    durations = [r.duration_ms for r in judged if r.duration_ms is not None]
+    tokens = [r.output_tokens for r in judged if r.output_tokens is not None]
+    if not durations:
+        return "judge duration not recorded (evaluated before it was)"
+    p50, p95 = np.percentile(durations, [50, 95])
+    line = (f"judge duration p50 {p50 / 1000:.1f}s  p95 {p95 / 1000:.1f}s  "
+            f"({len(durations)} answers, incl. retries)")
+    if tokens:
+        t50, t95 = np.percentile(tokens, [50, 95])
+        line += f"  output tokens p50 {t50:.0f}  p95 {t95:.0f}  max {max(tokens)}"
+    return line
+
+
 def report(run: RunResults, judge: str | None = None) -> str:
     c, answers = run.config, run.answers
     key, evaluation = finished(run, judge)
@@ -111,6 +128,7 @@ def report(run: RunResults, judge: str | None = None) -> str:
         # A timeout is retried once; only a second failure becomes a judge_error.
         lines.append(f"judge errors (counted as fails) {judge_errors}  "
                      f"judge timeouts (incl. retried) {judge_timeouts}")
+        lines.append(judge_cost(evaluation))
 
     refusals = Counter(a.refusal_reason or "-" for a in answers)
     errors = Counter(a.error or "-" for a in answers)

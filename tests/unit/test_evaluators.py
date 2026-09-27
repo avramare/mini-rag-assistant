@@ -18,7 +18,7 @@ from evals.judge import judge_faithfulness
 from evals.results import AnswerRecord, EvalResult, RetrievedDoc
 from mini_rag.assistant import Answer
 from mini_rag.documents import Access, load_documents
-from mini_rag.llm import FakeLLM, LLMTimeoutError
+from mini_rag.llm import FakeLLM, Generation, LLMTimeoutError
 from mini_rag.users import User
 
 
@@ -213,6 +213,18 @@ def test_judge_timeout_twice_is_a_counted_judge_error_not_a_crash(corpus):
     assert result.applicable and result.passed is False
     assert result.detail == "judge_error: timeout, timeout"
     assert len(llm.calls) == 2  # exactly one retry
+
+
+def test_judge_records_its_cost_so_a_prompt_change_can_be_measured(corpus):
+    # Judge v3 reasons ran long and the 30-answer evaluate took ~50 min (DECISIONS #30); a cost
+    # fix needs a before/after in the results file, not a guess.
+    ok = judge_faithfulness(record(), corpus.docs,
+                            FakeLLM([Generation(judge_reply(5), completion_tokens=42)]))
+    failed = judge_faithfulness(record(), corpus.docs,
+                                FakeLLM([LLMTimeoutError("slow"), LLMTimeoutError("slow")]))
+
+    assert ok.output_tokens == 42 and ok.duration_ms is not None and ok.duration_ms >= 0
+    assert failed.duration_ms is not None and failed.output_tokens is None
 
 
 def test_judge_skips_refusals_without_calling_the_model(corpus):

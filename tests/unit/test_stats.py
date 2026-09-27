@@ -136,6 +136,24 @@ def test_results_file_with_a_single_evaluation_loads_under_its_judge_version():
     assert overall_rate(loaded) == overall_rate(run)
 
 
+def test_report_shows_judge_duration_and_output_tokens_over_judged_answers_only():
+    run = make_run({"a": [True, True, True]}, CATEGORIES)
+    evaluation = run.evaluation()[1]
+    evaluation.judge = JUDGE
+    for ev, ms, tokens in zip(evaluation.answers, [1000.0, 2000.0, 9000.0], [50, 70, 300],
+                              strict=True):
+        ev.results.append(EvalResult(name="judge_faithfulness", applicable=True, passed=True,
+                                     value=5, duration_ms=ms, output_tokens=tokens))
+    evaluation.answers[0].results.append(  # a refusal: not judged, must not count
+        EvalResult(name="judge_faithfulness", applicable=False))
+
+    text = report(run)
+
+    # p95 of 1, 2, 9 s = 2 + 0.9 * 7 = 8.3 s (linear interpolation)
+    assert "judge duration p50 2.0s  p95 8.3s  (3 answers, incl. retries)" in text
+    assert "output tokens p50 70  p95 277  max 300" in text
+
+
 def test_compare_refuses_runs_with_different_as_of():
     base = make_run(PASSES, CATEGORIES)
     candidate = make_run(PASSES, CATEGORIES)
