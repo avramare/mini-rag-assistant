@@ -42,9 +42,10 @@ class FakeOllama:
         return [body for path, body in self.requests if path == "/api/chat"]
 
 
-def make_client(server: FakeOllama, num_ctx: int = 4096) -> OllamaClient:
+def make_client(server: FakeOllama, num_ctx: int = 4096,
+                num_predict: int | None = None) -> OllamaClient:
     return OllamaClient("http://ollama.test", "gen-model", "embed-model", num_ctx=num_ctx,
-                        transport=httpx.MockTransport(server))
+                        num_predict=num_predict, transport=httpx.MockTransport(server))
 
 
 def test_chat_request_sends_configured_num_ctx_and_answer_schema():
@@ -95,6 +96,25 @@ def test_usage_numbers_are_mapped_from_ollama_reply():
     assert gen.text == CHAT_REPLY["message"]["content"]
     assert (gen.prompt_tokens, gen.completion_tokens) == (812, 40)
     assert gen.duration_ms == pytest.approx(1500.0)
+
+
+def test_output_cap_is_sent_only_when_configured():
+    # The judge caps its reply length; the assistant must keep Ollama's default (no cap).
+    capped, uncapped = FakeOllama(capabilities=[]), FakeOllama(capabilities=[])
+
+    make_client(capped, num_predict=256).generate("sys", "prompt", ANSWER_SCHEMA)
+    make_client(uncapped).generate("sys", "prompt", ANSWER_SCHEMA)
+
+    assert capped.chat_bodies()[0]["options"]["num_predict"] == 256
+    assert "num_predict" not in uncapped.chat_bodies()[0]["options"]
+
+
+@pytest.mark.parametrize("done_reason, truncated", [("length", True), ("stop", False)])
+def test_reply_cut_off_at_the_output_cap_is_flagged_truncated(done_reason, truncated):
+    # A cut-off reply is usually still invalid JSON, but not always; the flag is what says why.
+    server = FakeOllama(capabilities=[], chat_reply=CHAT_REPLY | {"done_reason": done_reason})
+
+    assert make_client(server).generate("sys", "prompt").truncated is truncated
 
 
 def test_missing_usage_numbers_become_none_not_zero():

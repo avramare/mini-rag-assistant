@@ -28,6 +28,8 @@ class Generation:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     duration_ms: float | None = None
+    # The reply hit the output-token cap (`num_predict`) and was cut off, so it is incomplete.
+    truncated: bool = False
 
 
 class LLMClient(Protocol):
@@ -53,12 +55,15 @@ class OllamaClient:
     """
 
     def __init__(self, host: str, model: str, embed_model: str, num_ctx: int,
-                 read_timeout: float = 120.0,
+                 read_timeout: float = 120.0, num_predict: int | None = None,
                  transport: httpx.BaseTransport | None = None) -> None:
         self.model = model
         self.embed_model = embed_model
         self.num_ctx = num_ctx
         self.read_timeout = read_timeout
+        # Cap on output tokens per reply; None = Ollama's default (no cap we chose). A capped
+        # reply ends mid-text, so callers must treat `Generation.truncated` as a failed attempt.
+        self.num_predict = num_predict
         # Only the read timeout (waiting for the reply) is long; connecting to a local server is
         # fast or broken. `transport` lets unit tests plug in httpx.MockTransport: no network.
         self._http = httpx.Client(base_url=host, timeout=httpx.Timeout(10.0, read=read_timeout),
@@ -83,7 +88,8 @@ class OllamaClient:
             ],
             # Structured outputs: with a JSON Schema, Ollama constrains decoding to that shape.
             "format": schema or "json",
-            "options": {"num_ctx": self.num_ctx},
+            "options": {"num_ctx": self.num_ctx,
+                        **({"num_predict": self.num_predict} if self.num_predict else {})},
             "stream": False,
         }
         if self.supports_thinking():
@@ -101,6 +107,7 @@ class OllamaClient:
             prompt_tokens=data.get("prompt_eval_count"),
             completion_tokens=data.get("eval_count"),
             duration_ms=total_ns / 1e6 if total_ns is not None else None,
+            truncated=data.get("done_reason") == "length",
         )
 
     def embed(self, texts: list[str]) -> np.ndarray:

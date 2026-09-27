@@ -22,6 +22,8 @@ from mini_rag.documents import Document
 from mini_rag.llm import LLMClient, LLMTimeoutError
 
 PASS_SCORE = 4
+# Cap on the judge's output tokens, part of the judge version (evaluation_key). None = no cap.
+JUDGE_NUM_PREDICT: int | None = None
 
 JUDGE_SYSTEM = """You grade whether an ANSWER is faithful to the CONTEXT documents.
 Faithful means every factual claim in the answer is stated in, or follows directly from, the
@@ -117,13 +119,15 @@ def judge_prompt(record: AnswerRecord, docs: dict[str, Document]) -> str:
 def judge_faithfulness(record: AnswerRecord, docs: dict[str, Document],
                        llm: LLMClient) -> EvalResult:
     """Applicable to answers the user saw as an answer (not refusals, not failures).
-    One retry on invalid output or a timeout; a second failure is a `judge_error` and counts as a
-    fail. Failed attempts are kept in `attempt_errors`, so the report can count timeouts even when
-    the retry succeeded."""
+    One retry on invalid output, a timeout or a reply cut off at the output cap; a second failure
+    is a `judge_error` and counts as a fail. Failed attempts are kept in `attempt_errors`, so the
+    report can count them even when the retry succeeded."""
     if record.answer is None or record.answer.refused:
         return EvalResult(name="judge_faithfulness", applicable=False)
     prompt = judge_prompt(record, docs)
-    errors: list[str] = []  # one entry per failed attempt: "timeout" or "invalid_output"
+    # one entry per failed attempt: "timeout", "truncated" (cut off at the output cap) or
+    # "invalid_output"
+    errors: list[str] = []
     t0 = time.perf_counter()  # wall clock over all attempts: timeouts and retries are cost too
     for _ in range(2):
         note = RETRY_NOTE if errors[-1:] == ["invalid_output"] else ""
@@ -131,6 +135,9 @@ def judge_faithfulness(record: AnswerRecord, docs: dict[str, Document],
             generation = llm.generate(JUDGE_SYSTEM, prompt + note, JUDGE_SCHEMA)
         except LLMTimeoutError:
             errors.append("timeout")
+            continue
+        if generation.truncated:  # even if the cut happened to leave valid JSON: say why
+            errors.append("truncated")
             continue
         try:
             reply = JudgeReply.model_validate(json.loads(generation.text))

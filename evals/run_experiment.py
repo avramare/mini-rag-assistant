@@ -30,7 +30,7 @@ from evals.dataset import (
     load_dataset,
 )
 from evals.evaluators import Corpus, answer_passed, run_code_evaluators
-from evals.judge import JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
+from evals.judge import JUDGE_NUM_PREDICT, JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
 from evals.publish import LangfusePublisher, NoopPublisher, Publisher, publish_scores
 from evals.results import (
     AnswerEvaluation,
@@ -284,14 +284,16 @@ def main() -> int:
             judge = judge_info = None
             if not args.no_judge:
                 judge = OllamaClient(s.ollama_host, s.judge_model, s.embed_model,
-                                     num_ctx=s.num_ctx, read_timeout=s.ollama_read_timeout_s)
+                                     num_ctx=s.num_ctx, read_timeout=s.ollama_read_timeout_s,
+                                     num_predict=JUDGE_NUM_PREDICT)
                 for model in judge.loaded_models():
                     if model not in {s.judge_model, f"{s.judge_model}:latest"}:
                         judge.unload(model)  # only the judge stays in memory
                 print(f"loaded before judging: {judge.loaded_models()}")
                 judge_info = {"model": s.judge_model,
                               "digest": judge.model_digests([s.judge_model])[s.judge_model],
-                              "prompt_sha256": JUDGE_PROMPT_SHA256, "pass_score": PASS_SCORE}
+                              "prompt_sha256": JUDGE_PROMPT_SHA256, "pass_score": PASS_SCORE,
+                              "num_predict": JUDGE_NUM_PREDICT}
             evaluate(path, dataset, Corpus({d.id: d for d in docs}, users), judge, judge_info,
                      publisher, resume=args.resume)
             print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")

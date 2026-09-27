@@ -116,7 +116,7 @@ def report(run: RunResults, judge: str | None = None) -> str:
 
     applicable, failed = Counter(), Counter()
     diagnostic: set[str] = set()
-    judge_errors = judge_timeouts = 0
+    judge_errors = judge_timeouts = judge_truncated = 0
     for ev in evaluation.answers:
         for r in ev.results:
             if r.applicable:
@@ -124,6 +124,7 @@ def report(run: RunResults, judge: str | None = None) -> str:
                 failed[r.name] += not r.passed
                 judge_errors += r.detail.startswith("judge_error")
                 judge_timeouts += r.attempt_errors.count("timeout")
+                judge_truncated += r.attempt_errors.count("truncated")
                 if not r.gating:
                     diagnostic.add(r.name)
     lines += ["", f"{'evaluator':<20}{'applicable':>11}{'failed':>8}"]
@@ -133,7 +134,8 @@ def report(run: RunResults, judge: str | None = None) -> str:
     if evaluation.judge is not None:
         # A timeout is retried once; only a second failure becomes a judge_error.
         lines.append(f"judge errors (counted as fails) {judge_errors}  "
-                     f"judge timeouts (incl. retried) {judge_timeouts}")
+                     f"judge timeouts (incl. retried) {judge_timeouts}  "
+                     f"cut off at output cap (incl. retried) {judge_truncated}")
         lines.append(judge_cost(evaluation))
 
     refusals = Counter(a.refusal_reason or "-" for a in answers)

@@ -153,6 +153,16 @@ def test_new_judge_version_is_stored_next_to_the_old_one(env: Env):
     assert run.evaluation()[0] == "222222222222"  # latest is the default for reports
 
 
+def test_same_judge_prompt_with_an_output_cap_is_another_judge_version(env: Env):
+    # A cap changes which replies survive, so it must not overwrite the uncapped grades.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    env.evaluate(FakeLLM([JUDGE_OK] * 4), JUDGE_V1)
+
+    env.evaluate(FakeLLM([JUDGE_OK] * 4), JUDGE_V1 | {"num_predict": 200})
+
+    assert set(load(env.path).evaluations) == {"111111111111", "111111111111-np200"}
+
+
 def test_evaluate_refuses_a_changed_corpus(env: Env):
     env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
     write_doc(env.docs_dir, "holiday-policy.md", "holiday-policy", "Holiday policy", "public",

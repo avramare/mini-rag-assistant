@@ -228,6 +228,17 @@ def test_judge_records_its_cost_so_a_prompt_change_can_be_measured(corpus):
     assert failed.duration_ms is not None and failed.output_tokens is None
 
 
+def test_judge_reply_cut_off_at_the_output_cap_is_a_counted_failed_attempt(corpus):
+    # A capped reply can end mid-sentence yet still parse; its score would be a guess.
+    cut = Generation(judge_reply(2, "The answer"), truncated=True)
+
+    retried = judge_faithfulness(record(), corpus.docs, FakeLLM([cut, judge_reply(5)]))
+    twice = judge_faithfulness(record(), corpus.docs, FakeLLM([cut, cut]))
+
+    assert (retried.passed, retried.value, retried.attempt_errors) == (True, 5, ["truncated"])
+    assert twice.passed is False and twice.detail == "judge_error: truncated, truncated"
+
+
 def test_judge_skips_refusals_without_calling_the_model(corpus):
     llm = FakeLLM([])
 

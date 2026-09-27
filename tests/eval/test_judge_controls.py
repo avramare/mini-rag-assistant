@@ -20,7 +20,7 @@ from datetime import date
 
 import pytest
 
-from evals.judge import PASS_SCORE, judge_faithfulness
+from evals.judge import JUDGE_NUM_PREDICT, PASS_SCORE, judge_faithfulness
 from evals.results import AnswerRecord, RetrievedDoc
 from mini_rag.assistant import Answer
 from mini_rag.config import Settings
@@ -44,7 +44,8 @@ def settings() -> Settings:
 @pytest.fixture(scope="module")
 def judge(settings: Settings) -> OllamaClient:
     return OllamaClient(settings.ollama_host, settings.judge_model, settings.embed_model,
-                        num_ctx=settings.num_ctx, read_timeout=settings.ollama_read_timeout_s)
+                        num_ctx=settings.num_ctx, read_timeout=settings.ollama_read_timeout_s,
+                        num_predict=JUDGE_NUM_PREDICT)  # same judge as evaluate
 
 
 @pytest.fixture(scope="module")

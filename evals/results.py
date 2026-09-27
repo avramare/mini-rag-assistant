@@ -113,9 +113,13 @@ NO_JUDGE = "no-judge"
 
 
 def evaluation_key(judge: dict[str, Any] | None) -> str:
-    """Evaluations are stored per judge prompt version: re-running the same prompt overwrites its
-    own evaluation, a new prompt is stored next to the old one (and so are its Langfuse scores)."""
-    return judge["prompt_sha256"][:12] if judge else NO_JUDGE
+    """Evaluations are stored per judge version: re-running the same prompt overwrites its own
+    evaluation, a new prompt is stored next to the old one (and so are its Langfuse scores).
+    An output cap is part of the version (a cut-off reply grades differently): `<sha>-np<cap>`."""
+    if not judge:
+        return NO_JUDGE
+    cap = judge.get("num_predict")
+    return judge["prompt_sha256"][:12] + (f"-np{cap}" if cap else "")
 
 
 class RunResults(BaseModel):
