@@ -126,6 +126,8 @@ def report(run: RunResults, judge: str | None = None) -> str:
         f"prompt {c['assistant']['system_prompt_sha256'][:12]}",
         *([f"FILTERED dev run: {filter_label(c['filter'])}; not comparable with full runs"]
           if c.get("filter") else []),
+        *([f"frozen config {c['frozen']['path']} ({c['frozen']['sha256'][:12]})"]
+          if c.get("frozen") else []),
         f"{judge_label(key, evaluation)}  evaluated {evaluation.evaluated_at:%Y-%m-%d %H:%M} UTC"
         + (f"  (also stored: {', '.join(others)}; pick with --judge)" if others else ""),
         "",

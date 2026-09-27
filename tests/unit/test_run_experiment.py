@@ -6,12 +6,15 @@ import pytest
 
 from evals.dataset import Dataset, DatasetError, filter_dataset, load_dataset
 from evals.evaluators import Corpus
+from evals.frozen import FrozenConfigError, frozen_view, write_frozen
 from evals.judge import JUDGE_NUM_PREDICT
 from evals.publish import NoopPublisher
 from evals.results import evaluation_key, load
 from evals.run_experiment import (
     RunError,
+    apply_frozen,
     build_config,
+    check_run_frozen,
     describe_judge,
     evaluate,
     generate,
@@ -313,3 +316,35 @@ def test_filtered_run_is_marked_in_langfuse_dataset_run_metadata(env: Env):
 
     assert "filter" not in link_metadata(full)
     assert link_metadata(filtered) == {**filtered["assistant"], "filter": VERSIONING_ONLY}
+
+
+def test_frozen_run_records_the_file_and_evaluate_refuses_a_run_generated_without_it(
+        env: Env, tmp_path):
+    llm = FakeLLM([])
+    config = env.config(llm)
+    live = frozen_view(env.dataset, config["assistant"], config["model_digests"], JUDGE_V1)
+    write_frozen(live, tmp_path / "frozen.json")
+    warnings: list[str] = []
+
+    recorded = apply_frozen(tmp_path / "frozen.json", live, warnings.append,
+                            tree_status="?? notes.md\n")
+
+    assert recorded["path"].endswith("frozen.json") and len(recorded["sha256"]) == 64
+    assert any("untracked file" in w and "notes.md" in w for w in warnings)
+    run, _ = env.generate(HOLIDAY, ORION, HOLIDAY, ORION)  # generated without --frozen
+    with pytest.raises(RunError, match="not generated with --frozen"):
+        check_run_frozen(run, recorded)
+    run.config["frozen"] = recorded
+    check_run_frozen(run, recorded)  # same file: accepted
+
+
+def test_frozen_check_refuses_before_anything_runs_when_the_judge_changed(env: Env, tmp_path):
+    # generate checks the judge too: a night run must not fail hours later at evaluate.
+    llm = FakeLLM([])
+    config = env.config(llm)
+    write_frozen(frozen_view(env.dataset, config["assistant"], config["model_digests"],
+                             JUDGE_V1), tmp_path / "frozen.json")
+    live = frozen_view(env.dataset, config["assistant"], config["model_digests"], JUDGE_V2)
+
+    with pytest.raises(FrozenConfigError, match="judge.prompt_sha256"):
+        apply_frozen(tmp_path / "frozen.json", live, tree_status="")

@@ -247,3 +247,12 @@ def test_report_says_time_split_missing_for_runs_recorded_before_it():
     text = report(RunResults.model_validate(old))
 
     assert "generation time split not recorded (run before it was)" in text
+
+
+def test_report_names_the_frozen_config_a_run_was_generated_under():
+    run = make_run(PASSES, CATEGORIES)
+    assert "frozen config" not in report(run)
+
+    run.config["frozen"] = {"path": "evals/frozen/p4.json", "sha256": "f" * 64}
+
+    assert "frozen config evals/frozen/p4.json (ffffffffffff)" in report(run)

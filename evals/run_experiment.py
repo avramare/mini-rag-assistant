@@ -10,6 +10,8 @@ Usage:
     uv run python -m evals.run_experiment generate --name <run> --repeats 5 [--dataset P] [--resume]
         [--items id1,id2] [--category c1,c2]    # filtered dev run; not comparable with full runs
     uv run python -m evals.run_experiment evaluate --name <run> [--no-judge] [--resume]
+    uv run python -m evals.run_experiment freeze --dataset P --out evals/frozen/<name>.json
+    # --frozen <file> on generate/evaluate: refuse to run when anything differs from the file
 """
 
 import argparse
@@ -30,6 +32,14 @@ from evals.dataset import (
     load_dataset,
 )
 from evals.evaluators import Corpus, answer_passed, run_code_evaluators
+from evals.frozen import (
+    FrozenConfigError,
+    check_frozen,
+    check_tree,
+    frozen_view,
+    load_frozen,
+    write_frozen,
+)
 from evals.judge import JUDGE_NUM_PREDICT, JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
 from evals.publish import LangfusePublisher, NoopPublisher, Publisher, publish_scores
 from evals.results import (
@@ -215,6 +225,30 @@ def describe_judge(client: OllamaClient, digest: str | None) -> dict[str, Any]:
             "pass_score": PASS_SCORE, "num_predict": client.num_predict}
 
 
+ALL_SECTIONS = ("dataset", "assistant", "model_digests", "judge")
+
+
+def apply_frozen(path: Path, live: dict[str, Any], log: Log = print,
+                 tree_status: str | None = None) -> dict[str, str]:
+    """Refuse unless the live config equals the frozen file and no tracked file is changed.
+    Returns what the run config records about it."""
+    for name in check_tree(tree_status):
+        log(f"[warn] untracked file (not part of the frozen check): {name}")
+    frozen, sha256 = load_frozen(path)
+    check_frozen(frozen, live, path, ALL_SECTIONS)
+    log(f"config matches frozen {path} ({sha256[:12]})")
+    return {"path": path.as_posix(), "sha256": sha256}
+
+
+def check_run_frozen(run: RunResults, frozen: dict[str, str]) -> None:
+    """Evaluating under a frozen config only means something if the answers were generated
+    under the same one."""
+    recorded = run.config.get("frozen")
+    if recorded is None or recorded["sha256"] != frozen["sha256"]:
+        raise RunError(f"run {run.config['name']} was not generated with --frozen "
+                       f"{frozen['path']} (recorded: {recorded})")
+
+
 def _csv(value: str) -> list[str]:
     return sorted({v.strip() for v in value.split(",") if v.strip()})
 
@@ -246,10 +280,15 @@ def main() -> int:
     gen.add_argument("--resume", action="store_true")
     gen.add_argument("--items", type=_csv, help="only these item ids (comma separated)")
     gen.add_argument("--category", type=_csv, help="only these categories (comma separated)")
+    gen.add_argument("--frozen", type=Path, help="refuse to run unless the config equals this")
     ev = sub.add_parser("evaluate")
     ev.add_argument("--name", required=True)
     ev.add_argument("--no-judge", action="store_true")
     ev.add_argument("--resume", action="store_true")
+    ev.add_argument("--frozen", type=Path)
+    fr = sub.add_parser("freeze")
+    fr.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    fr.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
     s = Settings()
@@ -257,15 +296,22 @@ def main() -> int:
     docs = load_documents(s.docs_dir)
     langfuse = make_langfuse(s)
     publisher: Publisher = NoopPublisher() if langfuse is None else LangfusePublisher(langfuse)
-    path = results_path(args.name)
+    path = results_path(args.name) if hasattr(args, "name") else None
+
+    def current_judge_info(client: OllamaClient) -> dict[str, Any]:
+        """What the judge would be, without loading it: for the frozen check before generating."""
+        judge = judge_client(s.ollama_host, s.judge_model, s.embed_model, s.num_ctx,
+                             s.ollama_read_timeout_s)
+        return describe_judge(judge, client.model_digests([s.judge_model])[s.judge_model])
 
     try:
-        if args.command == "generate":
-            dataset = load_dataset(args.dataset, set(users))
+        if args.command in ("generate", "freeze"):
+            dataset = full = load_dataset(args.dataset, set(users))
             check_facts_in_corpus(dataset, docs)
             check_expected_docs(dataset, docs, users)
             run_filter = ({"items": args.items, "categories": args.category}
-                          if args.items or args.category else None)
+                          if args.command == "generate" and (args.items or args.category)
+                          else None)
             dataset = filter_dataset(dataset, run_filter)
             client = OllamaClient(s.ollama_host, s.gen_model, s.embed_model, num_ctx=s.num_ctx,
                                   read_timeout=s.ollama_read_timeout_s)
@@ -280,9 +326,17 @@ def main() -> int:
                         max_prompt_ctx_share=s.max_prompt_ctx_share, tracer=tracer)
                 return assistants[as_of]
 
+            digests = client.model_digests([s.gen_model, s.embed_model])
+            assistant_config = assistant_for(dataset.as_of).run_config()
+            live = frozen_view(full, assistant_config, digests, current_judge_info(client))
+            if args.command == "freeze":
+                write_frozen(live, args.out)
+                print(f"wrote {args.out}; review it and commit it before the frozen run")
+                return 0
             config = build_config(args.name, dataset, assistant_for(dataset.as_of), args.repeats,
-                                  client.model_digests([s.gen_model, s.embed_model]),
-                                  _git_info(), run_filter)
+                                  digests, _git_info(), run_filter)
+            if args.frozen:
+                config["frozen"] = apply_frozen(args.frozen, live)
             generate(dataset, assistant_for, users, {d.id: d.access for d in docs}, config,
                      path, publisher, resume=args.resume)
             tracer.flush()
@@ -303,10 +357,14 @@ def main() -> int:
                 print(f"loaded before judging: {judge.loaded_models()}")
                 judge_info = describe_judge(
                     judge, judge.model_digests([s.judge_model])[s.judge_model])
+            if args.frozen:
+                frozen = apply_frozen(args.frozen, frozen_view(
+                    dataset, run.config["assistant"], run.config["model_digests"], judge_info))
+                check_run_frozen(run, frozen)
             evaluate(path, dataset, Corpus({d.id: d for d in docs}, users), judge, judge_info,
                      publisher, resume=args.resume)
             print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")
-    except (RunError, DatasetError) as exc:
+    except (RunError, DatasetError, FrozenConfigError) as exc:
         print(f"[fail] {exc}")
         return 1
     finally:
