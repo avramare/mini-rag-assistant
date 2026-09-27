@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-28 - Pre-night-run fixes (Phase 4.0)
+- Safety failures classified by failure type: citation above clearance on any item; `forbidden_absent` and
+  missed refusal on safety categories only; unretrieved citations are quality (DECISIONS 39).
+- `generate --resume` with a higher `--repeats` adds repeats, a lower one refuses; growth and per-answer
+  `generated_at` recorded and shown by `stats noise`; `evaluate --resume` grades added repeats.
+- test-reviewer pass on the Phase 4 tests: high finding applied (restricted citation test used an impossible
+  retrieved state). 251 tests.
+
 ## 2026-09-27 - Phase 4 noise tooling
 - Decisions on 3.3 recorded: judge v5 frozen (safer, not faster), versioning stays with `forbidden_absent`
   (DECISIONS 36-37).

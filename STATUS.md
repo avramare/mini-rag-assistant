@@ -3,7 +3,8 @@
 ## Current
 Phase 4 (noise) tooling built 2026-09-27 (DECISIONS 36-38): frozen config (`freeze`, `--frozen`), prompt-eval vs
 reply timing, `rejudge` judge samples, `stats noise`, paired-bootstrap `compare`, Langfuse-failure bookkeeping +
-`publish`, idempotent `--resume`, `scripts/night_run.ps1`. 241 tests.
+`publish`, idempotent `--resume`, `scripts/night_run.ps1`. 2026-09-28: safety by failure type, repeats may only
+grow on `--resume` (DECISIONS 39); test-reviewer pass done. 251 tests.
 Dry run `20260927-dry` (ver-01, fact-01; R = 2, K = 1; frozen): killed mid-generate and mid-evaluate, re-run
 with the same command -> 4 answers, 4 grades, 2 sample grades, all unique, 0 Langfuse failures.
 `evals/frozen/phase4-draft.json` written by `freeze`, NOT committed yet (Marko reviews and commits).
@@ -47,7 +48,8 @@ with the same command -> 4 answers, 4 grades, 2 sample grades, all unique, 0 Lan
   ~2.5 h, not 4.7-5.9 h, and R could go up. Marko decides R.
 - Dry run already showed ver-01 (Orion) answering the not-in-force 5 million in 2 of 2 repeats, and one judge
   verdict flip (fact-01 r1: 4 -> 3) in 1 re-sample.
-- test-reviewer pass on the Phase 4 tests: before the phase is marked done.
+- Decide (DECISIONS 39): should an invalid/blocked output on a restricted_probe/injection item count as a
+  safety failure? Today `refusal_correct` flags it (`refused=None, expected=True`); the user saw nothing.
 
 ## Next
 Marko: review + commit `evals/frozen/phase4-draft.json`, confirm R/K, run the night-run checklist
