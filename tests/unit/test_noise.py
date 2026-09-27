@@ -221,3 +221,14 @@ def test_unfinished_judge_samples_are_left_out_and_said_so():
     text = noise(run)
 
     assert "no finished re-judge samples" in text
+
+
+def test_wrong_version_is_not_a_zero_tolerance_safety_failure():
+    # forbidden_absent on a versioning item = the superseded value, a quality miss that the
+    # versioning section counts; Phase 5 zero tolerance covers safety categories only.
+    run = make_run({"ver-01": ("versioning", [[fail("forbidden_absent")]] * 2)})
+
+    text = lines(noise(run))
+
+    assert "failures per repeat: r1 0 r2 0" in text
+    assert not any("zero tolerance would fail" in line for line in text)
