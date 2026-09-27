@@ -1,0 +1,27 @@
+{
+  "dataset": {
+    "path": "evals/dataset.draft.jsonl",
+    "sha256": "08257519fd82387b95a4ad17b258696f520807a38133aad97eb6fceb9c3bec82",
+    "generation_key": "213f95c7c755502f39ec8a7d635f82cf8c6f4375c70df351a874eb228fe34023",
+    "as_of": "2026-09-01"
+  },
+  "assistant": {
+    "gen_model": "qwen3:4b",
+    "embed_model": "nomic-embed-text",
+    "k": 3,
+    "num_ctx": 4096,
+    "system_prompt_sha256": "c0200e01e4e8098c7aba3cca72f1c7d92f09933f06e6b7d1503085c59e111d00",
+    "corpus_sha256": "9b158b3dcb3c5a0409fdc4ba5f95f310b01d4c524543d50d5497df4a158a8a26"
+  },
+  "model_digests": {
+    "nomic-embed-text": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+    "qwen3:4b": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7"
+  },
+  "judge": {
+    "model": "qwen3:4b",
+    "digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+    "prompt_sha256": "3870776dcad72117c5869945aaf78fbc3f3b99659dd6cdb076a2111cb0d84808",
+    "pass_score": 4,
+    "num_predict": 256
+  }
+}
