@@ -1,21 +1,26 @@
 # Status
 
 ## Current
-Phase 3 committed 2026-09-25 (68dcd33) plus follow-ups (judge as_of fix, expected_docs, retrieval_recall,
-judge v3, per-judge-version evaluations, resumable evaluate).
-Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat) holds two evaluations: judge v2 `797638a132e2` 83.3%
-and judge v3 `ad47ba4fb182` 86.7% item-level (n=30); v3: versioning 75%, safety categories 100%/83.3%.
+Phase 3 committed 2026-09-25 (68dcd33) plus follow-ups through 2026-09-27: judge v4 (in-force labels computed
+in code), judge v5 (3-sentence reason, output cap 256), judge cost in the report, filtered dev runs
+(`generate --items/--category`).
+Smoke run `20260925-smoke-draft` (draft dataset, 1 repeat) holds four evaluations; v3, v4 and v5 all 86.7%
+item-level (26/30, n=30), identical pass/fail. Latest = v5 `3870776dcad7-np256`.
 
 ## Open items
-- Judge cannot tell which Orion version is in force AFTER 2027-01-01: the after-v2 eval controls fail
-  (`pytest -m eval tests/eval/test_judge_controls.py`: 2 failed, 2 passed). It passes "4.2M is current" on
-  2027-03-01 (8/8 samples on v3, 5/5 on v2) and sometimes fails "5M" (reasons misorder the dates).
-  `forbidden_absent` still catches a wrong version in the dataset run. Proposed (Marko to decide): compute the
-  version in force in code and label docs in the judge prompt; own prediction first (DECISIONS 30).
-- Judge v3 reasons are long ("But wait, ..." loops); the 30-answer evaluate took ~50 min on CPU. Watch the
-  timeout count in the report; raise `OLLAMA_READ_TIMEOUT_S` and `evaluate --resume` if needed.
-- Langfuse: judge scores sent before 19400a5 use the old id (trace + name) and hold v3 values; the next evaluate
-  adds v3 scores under the new id next to them (DECISIONS 31).
+- Judge controls (`pytest -m eval tests/eval/test_judge_controls.py`, 6 tests): v5 6/6 in one pytest round and
+  32/32 samples before the cap; v4 was lenient on "superseded 4.2M presented as current" in 4 of 26 samples.
+  2 rounds only -- keep running the controls on every judge change (DECISIONS 33-35). `forbidden_absent` still
+  catches a wrong version independently of the judge.
+- Judge cost: v5 did NOT speed up the judge (smoke p50 57.7 s vs v4 47.8 s; tokens p50 99 vs 79); one reply hit
+  the 256 cap (ver-02, retried). Proposed, not done: measure prompt-eval vs reply time
+  (`prompt_eval_duration`/`eval_duration`) before any further cost change (DECISIONS 35).
+- Dev run `20260927-dev-versioning` (filter check, 4 items, 1 repeat): versioning 1/4 vs 3/4 in the smoke run on
+  the same questions -- regenerated answers, not a judge change. ver-01 answered the superseded version
+  (`forbidden_absent` and the v5 judge both failed it). More evidence for measuring with repeats in Phase 4.
+- Proposed (Marko to decide): a code check for version items in the judge's place (DECISIONS 34 outcome).
+- Langfuse: judge scores sent before 19400a5 use the old id (trace + name); later evaluates add scores under the
+  per-judge-version id next to them (DECISIONS 31).
 - `results/20260925-smoke-draft.judge-v2.bak.json`: local backup taken before the v3 re-run; its evaluation is now
   merged into the results file. Safe to delete.
 - Smoke-run model failures: two-part questions answered only in part (fact-01, fact-05, restr-03b) -- all
@@ -37,6 +42,6 @@ and judge v3 `ad47ba4fb182` 86.7% item-level (n=30); v3: versioning 75%, safety 
   close VS Code's Python language server first, it locks `.pyd` files.
 
 ## Next
-Marko decides on the judge's in-force labelling (after-v2 controls). Marko writes evals/dataset.jsonl
-(with expected_docs). Then Phase 4 - noise.
+Marko reviews DECISIONS 33-35 and decides on keeping v5 / the version-item code check. Marko writes
+evals/dataset.jsonl (with expected_docs). Then Phase 4 - noise.
 

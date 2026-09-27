@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-27 - Judge v4/v5, judge cost, filtered dev runs
+- Hypothesis "judge misorders only same-year dates" tested with 2028 controls (10 samples each) on v3:
+  falsified, 7/10 lenient on a superseded value (DECISIONS 33).
+- Judge v4 (`be5839e523ff`): `version_status` labels each versioned doc in force / superseded / not yet in force
+  on as_of, computed in the evals package; unit-tested for same-year, different-year, boundary day, 3-chain.
+  Smoke run unchanged (26/30); controls improved, still 4/26 lenient on the negative case (DECISIONS 34).
+- Judge duration and output tokens recorded per answer and shown in the report.
+- Judge v5 (`3870776dcad7-np256`): reason at most 3 sentences, `num_predict` 256 (measured max 195 + ~30%);
+  cut-off replies are a counted `truncated` attempt; the cap is part of the evaluation key. Verdicts held,
+  controls 6/6; cost did not drop (DECISIONS 35).
+- `generate --items/--category`: filter recorded in run config and Langfuse dataset-run metadata, re-applied by
+  evaluate, marked in the report; compare refuses runs with different filters. 178 tests.
+
 ## 2026-09-25 - Judge v3 and evaluation pipeline hardening
 - Judge v3 (`ad47ba4fb182`): `reason` before `score` in the JSON schema, prediction committed first (DECISIONS 30).
   Smoke run re-evaluated: ver-02 2 -> 5 (5/5 re-samples), 25 -> 26 of 30, no other pass/fail change. New after-v2
