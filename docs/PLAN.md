@@ -56,10 +56,21 @@ Work phase by phase. Finish acceptance criteria before moving on. Start each pha
 **Done when:** one experiment run is visible and comparable in Langfuse.
 
 ## Phase 4 – Noise
-- Run the same config 3 times with `--repeats 5`.
-- `stats.py`: pass rate per run with a **Wilson 95% interval**; per-item pass rate; items that flip between runs.
+- One run of a **frozen** config (`evals/frozen/<name>.json`: dataset, as_of, k, num_ctx, prompt, corpus,
+  model digests, judge v5) with R repeats; each repeat is its own Langfuse dataset run, so repeat-to-repeat is
+  run-to-run. R from measured p50/p95 so generation + judging fit in ~6 h (draft dataset: R = 6, K = 3;
+  DECISIONS 38). `--frozen` refuses any difference and any tracked-file change.
+- Generation noise (`stats noise`): pass rate per repeat and its spread; item-level rate with a **Wilson 95%
+  interval**, n = items; unstable items (0 < rate < 1) with their per-repeat pattern; per category, versioning
+  items listed; safety-evaluator failures under no change; |delta| over every split of the repeats into two
+  groups of g (input for the Phase 5 margin).
+- Judge noise, separately: `rejudge` grades one repeat's saved answers K more times with the same judge,
+  stored as samples next to the evaluation; `stats noise` reports the per-answer verdict flip rate.
+- `compare`: paired per-item deltas with a paired bootstrap interval of the mean difference.
+- Prompt-eval vs reply time (Ollama's `prompt_eval_duration` / `eval_duration`), p50/p95, in `report`.
 - Repeats of the same question are not independent samples. The effective sample size for "how good is the system"
   is the number of **items**, not items × repeats. Compute intervals on item-level pass rates and say so in the output.
+- Night run: `scripts/night_run.ps1` with the checklist in DECISIONS 38.
 
 **Done when:** Marko can state "the same config varies by about ±X percentage points".
 

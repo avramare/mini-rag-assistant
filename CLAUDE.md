@@ -43,7 +43,9 @@ evals/
   publish.py       # everything sent to Langfuse; facts never, judge reasons masked like traces
   results.py       # results/<run>.json: config, answers (pass 1), evaluation (pass 2)
   run_experiment.py# two passes: generate (gen model) -> evaluate (judge), re-runnable judge
-  stats.py         # report per category; compare (Wilson interval, flips in Phase 4)
+  stats.py         # report per category; compare (Wilson, paired bootstrap)
+  noise.py         # `stats noise`: repeat-to-repeat and judge noise (Phase 4)
+  frozen.py        # frozen config for noise runs: diff + git tree check
   baseline.json    # committed; only updated with Marko's explicit approval
 tests/
   unit/            # deterministic, FakeLLM, no network, must run in seconds
@@ -85,6 +87,11 @@ uv run python -m evals.run_experiment generate --name <run> --repeats 5 [--datas
 uv run python -m evals.run_experiment evaluate --name <run> [--no-judge]   # re-runnable
 uv run python -m evals.stats report results/<run>.json
 uv run python -m evals.stats compare results/<baseline>.json results/<candidate>.json
+uv run python -m evals.stats noise results/<run>.json
+uv run python -m evals.run_experiment rejudge --name <run> --samples K [--resume]
+uv run python -m evals.run_experiment freeze --dataset P --out evals/frozen/<name>.json
+uv run python -m evals.run_experiment publish --name <run>   # re-send what Langfuse missed
+.\scripts\night_run.ps1 -Name <run> -Repeats R -Samples K -Frozen <file>   # unattended, resumable
 uv run ruff check .
 ```
 
