@@ -174,7 +174,8 @@ def test_judge_sees_as_of_and_effective_dates_to_tell_versions_apart(corpus):
     system, prompt = llm.calls[0][0], llm.calls[0][1]
     assert "AS OF: 2026-07-15" in prompt
     assert "[doc id: holiday-policy] Holiday policy (effective 2026-06-01)" in prompt
-    assert "latest version in force on the AS OF date" in " ".join(system.split())
+    # v4: the status is decided in code and labelled; the judge is told not to compare dates.
+    assert "do not work the status out from the dates yourself" in " ".join(system.split())
 
 
 def test_judge_schema_asks_for_reason_before_score(corpus):

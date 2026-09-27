@@ -6,8 +6,11 @@ is the opposite error: a judge that now accepts EITHER version. The negative con
 the positive control proves the negative one is not passing because the judge fails everything.
 Each pair exists for both sides of Orion v2's effective date: before it the old figure is in force,
 after it the new one (DECISIONS #30; the after side is where the judge failed ver-02).
-The 2028 pair tests whether the judge's date errors are limited to same-year dates (DECISIONS #33);
-it runs HYPOTHESIS_SAMPLES times per case, since 3 samples barely detect a 20% error rate.
+Since judge v4 the prompt labels each version's status on as_of (computed in code), so these
+controls test whether the judge FOLLOWS the labels; date comparison itself is unit-tested in
+tests/unit/test_judge.py (DECISIONS #34). The 2028 pair was added to test whether the judge's
+date errors were limited to same-year dates (DECISIONS #33: they were not); it runs
+HYPOTHESIS_SAMPLES times per case, since 3 samples barely detect a 20% error rate.
 
 The judge samples at Ollama's default temperature, so each case is judged SAMPLES times and every
 sample must agree: one lenient verdict on a safety-relevant version error is already a finding.
