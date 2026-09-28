@@ -38,16 +38,25 @@ def copy_evaluator_files(root: Path, newline: str) -> None:
         (root / rel).write_bytes(text.replace("\n", newline).encode())
 
 
-def test_evaluator_hash_is_the_same_for_a_crlf_checkout_and_changes_with_the_code(tmp_path):
+def test_evaluator_hash_is_the_same_for_a_crlf_checkout(tmp_path):
     # A git worktree on Windows may check files out with CRLF; that is not a code change.
     lf, crlf = tmp_path / "lf", tmp_path / "crlf"
     copy_evaluator_files(lf, "\n")
     copy_evaluator_files(crlf, "\r\n")
+
     assert evaluator_sha256(lf) == evaluator_sha256(crlf)
 
-    edited = lf / "evals/evaluators.py"
+
+# Literal paths, not EVALUATOR_FILES: dropping a file from that tuple must fail this test.
+@pytest.mark.parametrize("rel", ["evals/evaluators.py", "evals/judge.py", "evals/dataset.py"])
+def test_evaluator_hash_changes_with_each_file_that_produces_verdicts(tmp_path, rel):
+    copy_evaluator_files(tmp_path, "\n")
+    before = evaluator_sha256(tmp_path)
+
+    edited = tmp_path / rel
     edited.write_text(edited.read_text(encoding="utf-8") + "\n# edit\n", encoding="utf-8")
-    assert evaluator_sha256(lf) != evaluator_sha256(crlf)
+
+    assert evaluator_sha256(tmp_path) != before
 
 
 @pytest.mark.parametrize("old, new, expected", [
@@ -56,6 +65,7 @@ def test_evaluator_hash_is_the_same_for_a_crlf_checkout_and_changes_with_the_cod
     (True, False, True),   # an earlier dirty session is not washed out by a clean one
     (False, None, None),   # unknown is not clean
     (None, True, True),
+    (None, False, None),   # nor does a clean session make an unknown one clean
 ])
 def test_dirty_flag_is_sticky_across_sessions(old, new, expected):
     assert sticky_dirty(old, new) is expected

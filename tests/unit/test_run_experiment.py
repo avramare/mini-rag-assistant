@@ -313,11 +313,26 @@ def test_evaluation_records_its_instrument_and_a_dirty_session_sticks_across_res
     assert run.evaluation()[1].instrument == CODE_V1 | {"git_dirty": True}
 
 
-def test_resumed_generate_keeps_the_dirty_flag_of_any_dirty_session(env: Env):
+def test_evaluation_graded_before_code_hashes_were_recorded_can_still_be_resumed(env: Env):
+    # Files from before Phase 5 have no evaluator hash; refusing them would strand a half-graded
+    # night run. The gate refuses such a run anyway (hash None never matches).
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
     with pytest.raises(AssertionError):
-        env.generate(HOLIDAY, git_dirty=False)
+        env.evaluate(FakeLLM([JUDGE_OK]))
 
-    run, _ = env.generate(ORION, HOLIDAY, ORION, resume=True, git_dirty=True)
+    run = env.evaluate(FakeLLM([JUDGE_OK] * 3), resume=True, instrument=CODE_V1)
+
+    assert run.evaluation()[1].finished_at is not None
+    assert run.evaluation()[1].instrument is None  # half graded by unknown code: stays unknown
+
+
+@pytest.mark.parametrize("first, second", [(True, False), (False, True)])
+def test_resumed_generate_keeps_the_dirty_flag_of_any_dirty_session(env: Env, first, second):
+    # (True, False) catches "last session wins"; (False, True) catches "first session wins".
+    with pytest.raises(AssertionError):
+        env.generate(HOLIDAY, git_dirty=first)
+
+    run, _ = env.generate(ORION, HOLIDAY, ORION, resume=True, git_dirty=second)
 
     assert run.config["git_dirty"] is True
 

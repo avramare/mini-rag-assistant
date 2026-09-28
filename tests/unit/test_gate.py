@@ -97,7 +97,7 @@ def rule(report: str, number: int) -> str:
 
 # --- rule 1: safety ---------------------------------------------------------------------------
 
-def test_one_leak_in_one_candidate_repeat_fails_the_gate_although_every_item_passes():
+def test_one_leak_in_one_candidate_repeat_fails_the_gate_although_the_overall_rate_holds():
     # Mutation checked: rule 1 removed -> this passes.
     cand = make_run({i: "PPP" for i in TEN}, results={("i03", 3): [ok(), LEAK]})
 
@@ -106,11 +106,24 @@ def test_one_leak_in_one_candidate_repeat_fails_the_gate_although_every_item_pas
     assert not passed
     assert rule(report, 1).startswith("RULE 1 safety (zero tolerance): FAIL")
     assert f"i03        factual           r3  citations_valid: secret-doc: {NOT_READABLE}" in report
-    assert "VERDICT: FAIL (rule 1 safety)" in report
+    assert report.endswith("VERDICT: FAIL (rule 1 safety)")
+
+
+@pytest.mark.parametrize("category", ["restricted_probe", "injection"])
+def test_forbidden_fact_on_a_safety_item_fails_rule_1(category):
+    # The category decides: the same failure on a versioning item passes (next test).
+    # Mutation checked: is_safety_failure called with a fixed non-safety category -> this passes.
+    categories = {"i00": category}
+    cand = make_run({i: "PPP" for i in TEN}, categories,
+                    results={("i00", 2): [fail("forbidden_absent", "forbidden facts present: #1")]})
+
+    passed, report = gate(baseline_of(TEN, categories), cand)
+
+    assert not passed and rule(report, 1).startswith("RULE 1 safety (zero tolerance): FAIL")
 
 
 def test_superseded_value_on_a_versioning_item_is_a_quality_miss_not_a_safety_failure():
-    # Mutation checked: is_safety_failure called without the item's category -> this fails.
+    # Mutation checked: is_safety_failure called with a fixed safety category -> this fails.
     categories = {"i00": "versioning"}
     cand = make_run({i: "PPP" for i in TEN}, categories,
                     results={("i00", 1): [fail("forbidden_absent", "forbidden facts present: #1")]})
@@ -207,7 +220,7 @@ def test_every_rule_is_evaluated_and_reported_when_the_first_one_already_failed(
     assert [rule(report, n).split(":")[1].split()[0] for n in (1, 2, 3)] == ["FAIL"] * 3
 
 
-def test_a_category_can_drop_50_points_without_failing_the_gate_and_is_listed():
+def test_a_category_can_drop_33_points_without_failing_the_gate_and_is_listed():
     # 2-item category: one item 6/6 -> 1/3 is -33 pts in the category, -2.2 pts overall.
     # Mutation checked: gating on a category delta -> this fails.
     thirty = {f"i{n:02d}": "PPPPPP" for n in range(30)}
@@ -270,6 +283,7 @@ def test_no_change_candidate_says_so():
     ({"config": {"git_dirty": True}}, "candidate generated on a dirty or unknown tree"),
     ({"config": {"git_dirty": None}}, "candidate generated on a dirty or unknown tree"),
     ({"graded": {"git_dirty": True}}, "candidate graded on a dirty or unknown tree"),
+    ({"graded": {"git_dirty": None}}, "candidate graded on a dirty or unknown tree"),
 ])
 def test_candidate_measured_with_another_instrument_is_refused(change, reason):
     # Mutation checked, per check: skipping it -> its case passes the gate instead of refusing.
@@ -319,9 +333,13 @@ def test_candidate_with_other_than_the_set_number_of_repeats_is_refused():
         gate(baseline_of(TEN), make_run(TEN))
 
 
-def test_candidate_with_other_items_is_refused():
+@pytest.mark.parametrize("items", [
+    list(TEN)[:9],                 # one item missing
+    [*list(TEN)[:9], "renamed"],   # same count, one id different
+])
+def test_candidate_with_other_items_is_refused(items):
     with pytest.raises(GateRefused, match="candidate items differ"):
-        gate(baseline_of(TEN), make_run({i: "PPP" for i in list(TEN)[:9]}))
+        gate(baseline_of(TEN), make_run({i: "PPP" for i in items}))
 
 
 @pytest.mark.parametrize("params", [
@@ -355,7 +373,18 @@ def test_baseline_holds_exact_item_patterns_rates_noise_and_empty_gate_parameter
     assert baseline["noise"]["per_repeat_rates"] == [0.666667] * 3 + [0.333333] * 3
     assert baseline["noise"]["no_change_bootstrap"]["mean_pts"] == -33.333333
     assert baseline["noise"]["safety_failures"] == 0
+    assert baseline["noise"]["judge"] is None  # no re-judge samples in this run
     assert baseline["instrument"]["judge_key"] == KEY
+
+
+def test_baseline_counts_safety_failures_by_failure_type():
+    # A leak on a factual item counts; a superseded value on a versioning item does not.
+    run = make_run({"a": "PPF", "b": "PPF"}, {"a": "factual", "b": "versioning"},
+                   results={("a", 3): [LEAK], ("b", 3): [fail("forbidden_absent")]})
+
+    baseline = build_baseline(run, fallback_instrument={}, changed=[], note="")
+
+    assert baseline["noise"]["safety_failures"] == 1
 
 
 def test_baseline_takes_todays_hashes_only_for_what_the_run_did_not_record():
@@ -383,6 +412,7 @@ def test_hashes_a_run_recorded_win_over_todays_files():
                                   "evals/evaluators.py"),
     ({"filter": {"items": ["i00"], "categories": None}}, [], "a filtered dev run"),
     ({"git_dirty": True}, [], "run generated on a dirty or unknown tree"),
+    ({"git_dirty": None}, [], "run generated on a dirty or unknown tree"),
 ])
 def test_baseline_is_refused_when_todays_files_would_not_describe_the_run(config, changed, reason):
     run = make_run(TEN, config=config)
