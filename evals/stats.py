@@ -11,6 +11,7 @@ Usage:
     uv run python -m evals.stats report results/<run>.json [--judge <sha prefix>]
     uv run python -m evals.stats compare results/<baseline>.json results/<candidate>.json
     uv run python -m evals.stats noise results/<run>.json [--judge <sha prefix>]
+    uv run python -m evals.stats gate evals/baseline.json results/<candidate>.json   # exit 0/1
 """
 
 import sys
@@ -340,6 +341,11 @@ def main() -> int:
         elif args[:1] == ["noise"] and len(args) in (2, 4) and args[2:3] in ([], ["--judge"]):
             from evals.noise import noise  # imports this module; imported late to avoid a cycle
             print(noise(load(Path(args[1])), args[3] if len(args) == 4 else None))
+        elif len(args) == 3 and args[0] == "gate":
+            from evals.gate import run_gate  # imports this module; imported late to avoid a cycle
+            passed, text = run_gate(Path(args[1]), Path(args[2]))
+            print(text)
+            return 0 if passed else 1
         elif len(args) == 3 and args[0] == "compare":
             print(compare(load(Path(args[1])), load(Path(args[2]))))
         else:

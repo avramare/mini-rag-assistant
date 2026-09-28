@@ -10,6 +10,7 @@ question are not independent. Intervals are over items.
 """
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
 
@@ -167,6 +168,29 @@ def generation_noise(run: RunResults, key: str) -> list[str]:
     return lines
 
 
+def split_table(passes: dict[str, list[bool]]) -> list[dict[str, float]]:
+    """Per group size g: how far the item-level rate of g repeats moves against another g repeats
+    of the SAME config (deltas in percentage points). Empty with fewer than 2 repeats."""
+    repeats = len(next(iter(passes.values())))
+    rows = []
+    for size in range(1, repeats // 2 + 1):
+        deltas = [split_delta(passes, a, b) for a, b in splits(repeats, size)]
+        median, p95 = np.percentile(deltas, [50, 95])
+        rows.append({"g": size, "splits": len(deltas), "median_pts": 100 * float(median),
+                     "p95_pts": 100 * float(p95), "max_pts": 100 * max(deltas)})
+    return rows
+
+
+def no_change_bootstrap(passes: dict[str, list[bool]]) -> tuple[int, float, float, float]:
+    """Paired bootstrap of the first half of the repeats against the second half:
+    (half, mean, low, high). With no change the interval should contain 0."""
+    half = len(next(iter(passes.values()))) // 2
+    first, second = range(half), range(half, 2 * half)
+    deltas = [float(np.mean([p[r] for r in second]) - np.mean([p[r] for r in first]))
+              for p in passes.values()]
+    return (half, *paired_bootstrap(deltas))
+
+
 def split_distribution(run: RunResults, key: str) -> list[str]:
     """Input for the Phase 5 noise margin: how far the item-level rate of g repeats moves against
     another g repeats of the SAME config."""
@@ -177,29 +201,34 @@ def split_distribution(run: RunResults, key: str) -> list[str]:
              f"{'g':>3}{'splits':>8}{'median':>9}{'p95':>9}{'max':>9}  (percentage points)"]
     if repeats < 2:
         return lines + ["  needs at least 2 repeats"]
-    for size in range(1, repeats // 2 + 1):
-        deltas = [split_delta(passes, a, b) for a, b in splits(repeats, size)]
-        median, p95 = np.percentile(deltas, [50, 95])
-        lines.append(f"{size:>3}{len(deltas):>8}{100 * median:>9.1f}{100 * p95:>9.1f}"
-                     f"{100 * max(deltas):>9.1f}")
-    half = repeats // 2
-    first, second = tuple(range(half)), tuple(range(half, 2 * half))
-    deltas = [float(np.mean([p[r] for r in second]) - np.mean([p[r] for r in first]))
-              for p in passes.values()]
-    mean, low, high = paired_bootstrap(deltas)
+    for row in split_table(passes):
+        lines.append(f"{row['g']:>3}{row['splits']:>8}{row['median_pts']:>9.1f}"
+                     f"{row['p95_pts']:>9.1f}{row['max_pts']:>9.1f}")
+    half, mean, low, high = no_change_bootstrap(passes)
     lines.append(f"Paired bootstrap, no change: r1-{half} vs r{half + 1}-{2 * half}: mean delta "
                  f"{100 * mean:+.1f} pts, 95% [{100 * low:+.1f}, {100 * high:+.1f}] "
-                 f"(n = {len(deltas)} items, 10000 resamples, seed 0)")
+                 f"(n = {len(passes)} items, 10000 resamples, seed 0)")
     lines.append("'worst drop' for Phase 5 = max; with few splits it is a rough estimate")
     return lines
 
 
-def judge_noise(run: RunResults, key: str) -> list[str]:
+@dataclass
+class JudgeNoise:
+    repeat: int
+    samples: int  # finished re-judge samples
+    unfinished: int
+    judged: int  # answers the judge applied to in that repeat
+    # answers whose verdict differs across evaluation + samples: (answer, scores, item_pass flips)
+    flips: list[tuple[tuple[str, int], list[float | None], bool]]
+    disagreement: list[float]  # per judged answer: share of verdict pairs that disagree
+    spread: int  # answers with more than one distinct score
+
+
+def judge_flips(run: RunResults, key: str) -> JudgeNoise | None:
+    """None when there is no finished re-judge sample."""
     samples = [s for s in run.judge_samples.get(key, []) if s.finished_at is not None]
-    unfinished = len(run.judge_samples.get(key, [])) - len(samples)
     if not samples:
-        return ["", "JUDGE NOISE  no finished re-judge samples; run "
-                "`run_experiment rejudge --name <run> --samples K`"]
+        return None
     repeat = samples[0].repeat
     graded = {(ev.item_id, ev.repeat): ev for ev in run.evaluations[key].answers
               if ev.repeat == repeat}
@@ -208,36 +237,47 @@ def judge_noise(run: RunResults, key: str) -> list[str]:
         for a in s.answers:
             sampled[(a.item_id, a.repeat)].append(a.result)
 
-    flips, disagreement, spread, decisive = [], [], 0, 0
-    judged = 0
+    out = JudgeNoise(repeat=repeat, samples=len(samples),
+                     unfinished=len(run.judge_samples[key]) - len(samples), judged=0, flips=[],
+                     disagreement=[], spread=0)
     for answer, ev in sorted(graded.items()):
         original = next(r for r in ev.results if r.name == JUDGE)
         if not original.applicable:
             continue
-        judged += 1
+        out.judged += 1
         results = [original, *sampled[answer]]
         verdicts = [bool(r.passed) for r in results]
         scores = [r.value for r in results]
         pairs = list(combinations(verdicts, 2))
-        disagreement.append(np.mean([a != b for a, b in pairs]))
-        spread += len(set(scores)) > 1
+        out.disagreement.append(float(np.mean([a != b for a, b in pairs])))
+        out.spread += len(set(scores)) > 1
         if len(set(verdicts)) > 1:
             others_pass = all(r.passed for r in ev.results
                               if r.applicable and r.gating and r.name != JUDGE)
-            decisive += others_pass
-            flips.append((answer, scores, others_pass))
-    k = len(samples)
-    lines = ["", f"JUDGE NOISE  repeat r{repeat} re-judged {k}x by the same judge; verdicts "
+            out.flips.append((answer, scores, others_pass))
+    return out
+
+
+def judge_noise(run: RunResults, key: str) -> list[str]:
+    noise_ = judge_flips(run, key)
+    if noise_ is None:
+        return ["", "JUDGE NOISE  no finished re-judge samples; run "
+                "`run_experiment rejudge --name <run> --samples K`"]
+    k, judged, flips = noise_.samples, noise_.judged, noise_.flips
+    lines = ["", f"JUDGE NOISE  repeat r{noise_.repeat} re-judged {k}x by the same judge; verdicts "
              f"per answer = evaluation + {k} samples = {k + 1}"
-             + (f"  ({unfinished} unfinished sample(s) ignored)" if unfinished else "")]
+             + (f"  ({noise_.unfinished} unfinished sample(s) ignored)"
+                if noise_.unfinished else "")]
     if not judged:
         return lines + ["  no judged answers in this repeat"]
+    decisive = sum(others_pass for _, _, others_pass in flips)
     lines += [
         f"Answers whose verdict flips: {len(flips)} of {judged} judged "
         f"({_pct(len(flips) / judged).strip()}, Wilson 95% "
         f"{_interval(*wilson(len(flips), judged))}, n = {judged} judged answers)",
-        f"Mean pairwise verdict disagreement: {_pct(float(np.mean(disagreement))).strip()}  "
-        f"answers with more than one distinct score: {spread}",
+        f"Mean pairwise verdict disagreement: "
+        f"{_pct(float(np.mean(noise_.disagreement))).strip()}  "
+        f"answers with more than one distinct score: {noise_.spread}",
         f"Flips that change item_pass (all other gating evaluators passed): {decisive}",
     ]
     for (item, rep), scores, others_pass in flips:
