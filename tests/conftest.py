@@ -14,6 +14,14 @@ from mini_rag.users import User
 from tests.helpers import FIXED_TODAY, FIXTURE_DOCS, write_doc
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    # Here, not in tests/eval/conftest.py: pytest reads options only from the top-level conftest.
+    parser.addoption("--candidate", type=Path, default=None,
+                     help="results file the regression gate judges (tests/eval)")
+    parser.addoption("--baseline", type=Path, default=Path("evals/baseline.json"),
+                     help="baseline the regression gate compares with")
+
+
 @pytest.fixture
 def docs_dir(tmp_path: Path) -> Path:
     for filename, fields in FIXTURE_DOCS.items():
