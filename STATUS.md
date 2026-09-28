@@ -1,15 +1,18 @@
 # Status
 
 ## Current
-Phase 4 (noise) tooling built 2026-09-27 (DECISIONS 36-38): frozen config (`freeze`, `--frozen`), prompt-eval vs
-reply timing, `rejudge` judge samples, `stats noise`, paired-bootstrap `compare`, Langfuse-failure bookkeeping +
-`publish`, idempotent `--resume`, `scripts/night_run.ps1`. 2026-09-28: safety by failure type, repeats may only
-grow on `--resume` (DECISIONS 39); test-reviewer pass done. 251 tests.
-Dry run `20260927-dry` (ver-01, fact-01; R = 2, K = 1; frozen): killed mid-generate and mid-evaluate, re-run
-with the same command -> 4 answers, 4 grades, 2 sample grades, all unique, 0 Langfuse failures.
-`evals/frozen/phase4-draft.json` written by `freeze`, NOT committed yet (Marko reviews and commits).
+Phase 4 done: noise run `20260928-noise-draft` (30 items x 6 repeats, frozen `phase4-draft.json`), report in
+`docs/FINDINGS.md`. Phase 5 (regression gate) built 2026-09-28 (DECISIONS 40): instrument hashes recorded at
+generate/evaluate, `stats gate` with 4 rules, `python -m evals.gate baseline`, pytest wrapper
+`tests/eval/test_regression_gate.py --candidate`, `scripts/gate_night.ps1`. 34 mutation checks caught; test-reviewer pass applied. 316 tests.
+`evals/baseline.json` built from `20260928-noise-draft`, provisional, gate parameters empty, NOT committed:
+Marko fills `candidate_repeats = 3`, `overall_margin_pts = 7` and commits it with the DECISIONS 41 predictions.
+Throwaway branches `exp/gate-nocite`, `exp/gate-nofilter` (never merged) for the validation candidates.
 
 ## Open items
+- Hardening (Marko, 2026-09-28): the app checks only that a citation was retrieved, not the user's clearance,
+  so access control is a single layer (the retrieval filter). Do NOT change before the gate validation run:
+  it changes the system the baseline measured (DECISIONS 40).
 - Judge controls (`pytest -m eval tests/eval/test_judge_controls.py`, 6 tests): v5 6/6 in one pytest round and
   32/32 samples before the cap; v4 was lenient on "superseded 4.2M presented as current" in 4 of 26 samples.
   2 rounds only -- keep running the controls on every judge change (DECISIONS 33-35). `forbidden_absent` still
@@ -52,7 +55,8 @@ with the same command -> 4 answers, 4 grades, 2 sample grades, all unique, 0 Lan
   safety failure? Today `refusal_correct` flags it (`refused=None, expected=True`); the user saw nothing.
 
 ## Next
-Marko: review + commit `evals/frozen/phase4-draft.json`, confirm R/K, run the night-run checklist
-(DECISIONS 38), start `scripts/night_run.ps1`. Then interpret `stats noise` and propose the Phase 5 margin.
+Marko: fill the gate parameters in `evals/baseline.json`, commit it with DECISIONS 41, set up the worktrees,
+run `scripts/gate_night.ps1` (setup and start commands in the Phase 5 hand-off). Morning: compare the three
+gate verdicts with the predictions, record the outcome in DECISIONS 41 and FINDINGS; delete the worktrees and
+the `exp/` branches. Classify the `facts_recall` failures (baseline stays provisional until then).
 Marko writes evals/dataset.jsonl (with expected_docs) in parallel.
-

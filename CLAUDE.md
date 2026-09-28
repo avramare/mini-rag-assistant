@@ -45,6 +45,8 @@ evals/
   run_experiment.py# two passes: generate (gen model) -> evaluate (judge), re-runnable judge
   stats.py         # report per category; compare (Wilson, paired bootstrap)
   noise.py         # `stats noise`: repeat-to-repeat and judge noise (Phase 4)
+  instrument.py    # instrument (must match) vs system under test (may differ) hashes for the gate
+  gate.py          # `stats gate` rules + baseline builder (Phase 5)
   frozen.py        # frozen config for noise runs: diff + git tree check
   baseline.json    # committed; only updated with Marko's explicit approval
 tests/
@@ -88,6 +90,9 @@ uv run python -m evals.run_experiment evaluate --name <run> [--no-judge]   # re-
 uv run python -m evals.stats report results/<run>.json
 uv run python -m evals.stats compare results/<baseline>.json results/<candidate>.json
 uv run python -m evals.stats noise results/<run>.json
+uv run python -m evals.stats gate evals/baseline.json results/<candidate>.json   # exit 0/1
+uv run pytest -m eval tests/eval/test_regression_gate.py --candidate results/<candidate>.json
+.\scripts\gate_night.ps1 -Name <prefix> -Repeats 3 -Candidates "label=.", "label=..\<worktree>"
 uv run python -m evals.run_experiment rejudge --name <run> --samples K [--resume]
 uv run python -m evals.run_experiment freeze --dataset P --out evals/frozen/<name>.json
 uv run python -m evals.run_experiment publish --name <run>   # re-send what Langfuse missed

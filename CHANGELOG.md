@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-28 - Phase 5 regression gate
+- Instrument vs system under test (DECISIONS 40): docs, users and evaluator code hashes recorded at
+  generate/evaluate; `git_dirty` counts tracked changes only and is sticky across `--resume`.
+- `stats gate <baseline> <candidate>` (exit 0/1): safety zero tolerance, overall paired mean vs margin,
+  stable-pass regressions; categories and dropped items report-only; refuses other instruments.
+- `python -m evals.gate baseline` builds `evals/baseline.json` (provisional, gate parameters for Marko).
+- `tests/eval/test_regression_gate.py --candidate`; `scripts/gate_night.ps1` (worktree candidates) with
+  shared `scripts/_steps.ps1`. 34 mutation checks caught; test-reviewer pass applied. 316 tests.
+
 ## 2026-09-28 - Pre-night-run fixes (Phase 4.0)
 - Safety failures classified by failure type: citation above clearance on any item; `forbidden_absent` and
   missed refusal on safety categories only; unretrieved citations are quality (DECISIONS 39).
