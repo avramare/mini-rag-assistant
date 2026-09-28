@@ -71,29 +71,30 @@ class Env:
                                        num_ctx=4096, tracer=tracer)
 
     def config(self, llm: FakeLLM, k: int = 3, run_filter: dict | None = None,
-               repeats: int = 2) -> dict:
+               repeats: int = 2, git_dirty: bool | None = False) -> dict:
         dataset = filter_dataset(self.dataset, run_filter)
         return build_config("run", dataset, self.assistant_for(llm, k)(dataset.as_of),
-                            repeats, {"fake-llm": None}, {"git_commit": "abc", "git_dirty": False},
-                            run_filter)
+                            repeats, {"fake-llm": None},
+                            {"git_commit": "abc", "git_dirty": git_dirty}, run_filter)
 
     def generate(self, *responses: str, resume: bool = False, k: int = 3,
                  run_filter: dict | None = None, publisher=None, tracer=None,
-                 repeats: int = 2):
+                 repeats: int = 2, git_dirty: bool | None = False):
         llm = FakeLLM(responses)
         assistant_for = self.assistant_for(llm, k, tracer)
         run = generate(filter_dataset(self.dataset, run_filter), assistant_for,
                        self.users, {d.id: d.access for d in self.docs},
-                       self.config(llm, k, run_filter, repeats), self.path,
+                       self.config(llm, k, run_filter, repeats, git_dirty), self.path,
                        publisher or NoopPublisher(), resume=resume, log=lambda _: None)
         return run, llm
 
     def evaluate(self, judge: FakeLLM | None, judge_info: dict | None = None,
-                 resume: bool = False, publisher=None):
+                 resume: bool = False, publisher=None, instrument: dict | None = None):
         corpus = Corpus({d.id: d for d in load_documents(self.docs_dir)}, self.users)
         return evaluate(self.path, self.dataset, corpus, judge,
                         judge_info or (JUDGE_V1 if judge else None),
-                        publisher or NoopPublisher(), resume=resume, log=lambda _: None)
+                        publisher or NoopPublisher(), resume=resume, instrument=instrument,
+                        log=lambda _: None)
 
 
 @pytest.fixture
@@ -283,6 +284,42 @@ def test_resume_refuses_a_different_judge_model(env: Env):
 
     with pytest.raises(RunError, match="no unfinished evaluation"):
         env.evaluate(FakeLLM([JUDGE_OK] * 3), JUDGE_V1 | {"digest": "sha256:new"}, resume=True)
+
+
+CODE_V1 = {"evaluator_sha256": "e1", "git_commit": "abc", "git_dirty": False}
+
+
+def test_resume_refuses_to_mix_grades_from_two_evaluator_code_versions(env: Env):
+    # The gate compares evaluator code hashes; one evaluation graded half by old code would carry
+    # a hash that describes only part of it.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    with pytest.raises(AssertionError):
+        env.evaluate(FakeLLM([JUDGE_OK]), instrument=CODE_V1)
+
+    with pytest.raises(RunError, match="evaluator code"):
+        env.evaluate(FakeLLM([JUDGE_OK] * 3), resume=True,
+                     instrument=CODE_V1 | {"evaluator_sha256": "e2"})
+
+
+def test_evaluation_records_its_instrument_and_a_dirty_session_sticks_across_resume(env: Env):
+    # A candidate graded partly on uncommitted code must not look clean to the gate because the
+    # last session happened to be clean.
+    env.generate(HOLIDAY, ORION, HOLIDAY, ORION)
+    with pytest.raises(AssertionError):
+        env.evaluate(FakeLLM([JUDGE_OK]), instrument=CODE_V1 | {"git_dirty": True})
+
+    run = env.evaluate(FakeLLM([JUDGE_OK] * 3), resume=True, instrument=CODE_V1)
+
+    assert run.evaluation()[1].instrument == CODE_V1 | {"git_dirty": True}
+
+
+def test_resumed_generate_keeps_the_dirty_flag_of_any_dirty_session(env: Env):
+    with pytest.raises(AssertionError):
+        env.generate(HOLIDAY, git_dirty=False)
+
+    run, _ = env.generate(ORION, HOLIDAY, ORION, resume=True, git_dirty=True)
+
+    assert run.config["git_dirty"] is True
 
 
 VERSIONING_ONLY = {"items": None, "categories": ["versioning"]}

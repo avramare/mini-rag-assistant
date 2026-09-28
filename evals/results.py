@@ -116,6 +116,8 @@ class Evaluation(BaseModel):
     dataset_sha256: str  # the facts used for grading; compare refuses different values
     judge: dict[str, Any] | None  # model, digest, prompt sha256; None with --no-judge
     answers: list[AnswerEvaluation]
+    # evaluator code hash and git state while grading (evals.instrument); None before Phase 5.
+    instrument: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -17,7 +17,6 @@ Usage:
 """
 
 import argparse
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -42,6 +41,7 @@ from evals.frozen import (
     load_frozen,
     write_frozen,
 )
+from evals.instrument import docs_sha256, evaluator_sha256, git_info, sticky_dirty, users_sha256
 from evals.judge import JUDGE_NUM_PREDICT, JUDGE_PROMPT_SHA256, PASS_SCORE, judge_faithfulness
 from evals.publish import (
     FailSafePublisher,
@@ -117,6 +117,8 @@ def generate(dataset: Dataset, assistant_for: Callable[[date], Assistant],
         if stable_config(run.config) != stable_config(config):
             raise RunError(f"{path} was generated with a different config; not resuming")
         grow_repeats(run, config["repeats"], log)
+        run.config["git_dirty"] = sticky_dirty(run.config.get("git_dirty"),
+                                               config.get("git_dirty"))
         save(run, path)
         config = run.config
     else:
@@ -193,12 +195,13 @@ def check_run_current(run: RunResults, dataset: Dataset, corpus: Corpus) -> Data
 
 def evaluate(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient | None,
              judge_info: dict[str, Any] | None, publisher: Publisher, *, resume: bool = False,
-             log: Log = print) -> RunResults:
+             instrument: dict[str, Any] | None = None, log: Log = print) -> RunResults:
+    """`instrument`: evaluator code hash and git state of this session (evals.instrument)."""
     run = load(path)
     dataset = check_run_current(run, dataset, corpus)
 
     key = evaluation_key(judge_info)  # same judge prompt: overwrite; new prompt: add alongside
-    evaluation = start_or_resume(run, key, dataset.sha256, judge_info, resume, log)
+    evaluation = start_or_resume(run, key, dataset.sha256, judge_info, resume, log, instrument)
     if evaluation.finished_at is not None:  # --resume on a finished evaluation: nothing to do
         return run
     items = {i.id: i for i in dataset.items}
@@ -316,7 +319,8 @@ def rejudge(path: Path, dataset: Dataset, corpus: Corpus, judge: LLMClient,
 
 
 def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
-                    judge_info: dict[str, Any] | None, resume: bool, log: Log) -> Evaluation:
+                    judge_info: dict[str, Any] | None, resume: bool, log: Log,
+                    instrument: dict[str, Any] | None = None) -> Evaluation:
     """Resumable = an unfinished evaluation by the same judge (model digest too) against the same
     facts; only then can its grades be mixed with new ones. Without --resume a resumable one is
     not thrown away by accident; one that can no longer be resumed is replaced.
@@ -327,15 +331,25 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
     would be replaced -> refuse."""
     old = run.evaluations.pop(key, None)  # re-inserted below: the one written last is latest
     unfinished = old is not None and old.finished_at is None
-    same = old is not None and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
+    # Evaluator code is compared only when both sides recorded it (files before Phase 5 did not).
+    old_code = (old.instrument or {}).get("evaluator_sha256") if old is not None else None
+    new_code = (instrument or {}).get("evaluator_sha256")
+    same = (old is not None
+            and (old.dataset_sha256, old.judge) == (dataset_sha256, judge_info)
+            and (old_code is None or new_code is None or old_code == new_code))
     resumable = unfinished and same
     if resume:
         if old is not None and not same:
             run.evaluations[key] = old
-            raise RunError(f"no unfinished evaluation by judge {key} with these facts and this "
-                           "judge model to resume, and the stored one would be replaced; run "
-                           "evaluate without --resume")
+            raise RunError(f"no unfinished evaluation by judge {key} with these facts, this "
+                           "judge model and this evaluator code to resume, and the stored one "
+                           "would be replaced; run evaluate without --resume")
         if old is not None:
+            if old.instrument is not None and instrument is not None:
+                old.instrument["git_dirty"] = sticky_dirty(old.instrument.get("git_dirty"),
+                                                           instrument.get("git_dirty"))
+            elif not old.answers:
+                old.instrument = instrument
             if not unfinished and len(old.answers) < len(run.answers):
                 # Repeats were added after it finished: grade the new answers, keep the old.
                 old.finished_at = None
@@ -354,7 +368,7 @@ def start_or_resume(run: RunResults, key: str, dataset_sha256: str,
         log(f"replacing unfinished evaluation by judge {key}: other facts or judge model")
     run.evaluations[key] = Evaluation(evaluated_at=datetime.now(UTC), finished_at=None,
                                       dataset_sha256=dataset_sha256, judge=judge_info,
-                                      answers=[])
+                                      answers=[], instrument=instrument)
     return run.evaluations[key]
 
 
@@ -397,17 +411,6 @@ def check_run_frozen(run: RunResults, frozen: dict[str, str]) -> None:
 
 def _csv(value: str) -> list[str]:
     return sorted({v.strip() for v in value.split(",") if v.strip()})
-
-
-def _git_info() -> dict[str, Any]:
-    try:
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                                check=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True,
-                                    text=True, check=True).stdout.strip())
-    except (OSError, subprocess.CalledProcessError):
-        return {"git_commit": None, "git_dirty": None}
-    return {"git_commit": commit, "git_dirty": dirty}
 
 
 def main() -> int:
@@ -488,7 +491,9 @@ def main() -> int:
                 print(f"wrote {args.out}; review it and commit it before the frozen run")
                 return 0
             config = build_config(args.name, dataset, assistant_for(dataset.as_of), args.repeats,
-                                  digests, _git_info(), run_filter)
+                                  digests, git_info(), run_filter)
+            config["instrument"] = {"docs_sha256": docs_sha256(docs),
+                                    "users_sha256": users_sha256(users)}
             if args.frozen:
                 config["frozen"] = apply_frozen(args.frozen, live)
             generate(dataset, assistant_for, users, {d.id: d.access for d in docs}, config,
@@ -531,7 +536,8 @@ def main() -> int:
                 print(f"re-judged {path}; noise: uv run python -m evals.stats noise {path}")
             else:
                 evaluate(path, dataset, corpus, judge, judge_info, publisher,
-                         resume=args.resume)
+                         resume=args.resume,
+                         instrument={"evaluator_sha256": evaluator_sha256(), **git_info()})
                 print(f"evaluated {path}; report: uv run python -m evals.stats report {path}")
     except (RunError, DatasetError, FrozenConfigError) as exc:
         print(f"[fail] {exc}")
